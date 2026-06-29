@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import com.er1cmo.xiaozhiandroid.audio.AudioEngine
 import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
 import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
 import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
@@ -34,12 +35,14 @@ fun AppNavigation() {
             appScope = appScope,
         )
     }
+    val audioEngine = remember { AudioEngine(appScope) }
     val viewModel = remember {
         MainViewModel(
             configRepository = configRepository,
             deviceIdentityManager = deviceIdentityManager,
             otaActivationClient = otaActivationClient,
             xiaozhiWebSocketClient = xiaozhiWebSocketClient,
+            audioEngine = audioEngine,
             appScope = appScope,
         )
     }

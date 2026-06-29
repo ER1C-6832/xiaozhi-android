@@ -15,6 +15,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
 
 class XiaozhiWebSocketClient(
@@ -168,6 +169,12 @@ class XiaozhiWebSocketClient(
 
     fun sendAbort(): Boolean {
         return sendTextPayload(XiaozhiMessage.abort(sessionId))
+    }
+
+    fun sendAudioFrame(opusFrame: ByteArray): Boolean {
+        val socket = webSocket ?: return false
+        if (!isConnected()) return false
+        return socket.send(opusFrame.toByteString())
     }
 
     fun close(reason: String = "client_close") {

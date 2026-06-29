@@ -1,5 +1,9 @@
 package com.er1cmo.xiaozhiandroid.ui.main
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,8 +24,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.er1cmo.xiaozhiandroid.ui.main.components.AssistantFace
 import com.er1cmo.xiaozhiandroid.ui.main.components.BottomControlBar
 import com.er1cmo.xiaozhiandroid.ui.main.components.DebugLogPanel
@@ -32,6 +38,29 @@ fun MainScreen(
     onOpenSettings: () -> Unit,
 ) {
     val uiState = viewModel.uiState
+    val context = LocalContext.current
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            viewModel.onMicrophonePermissionGranted()
+        } else {
+            viewModel.onMicrophonePermissionDenied()
+        }
+    }
+
+    fun handleStartListening() {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hasPermission) {
+            viewModel.startManualListening()
+        } else {
+            viewModel.requestMicrophonePermission()
+            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     Scaffold(
         modifier = Modifier
@@ -49,7 +78,7 @@ fun MainScreen(
                 isManualMode = uiState.isManualMode,
                 onTextChanged = viewModel::updateTextInput,
                 onSendText = viewModel::sendText,
-                onStartListening = viewModel::startManualListening,
+                onStartListening = ::handleStartListening,
                 onStopListening = viewModel::stopManualListening,
                 onAbort = viewModel::abortConversation,
                 onToggleManualMode = viewModel::toggleManualMode,

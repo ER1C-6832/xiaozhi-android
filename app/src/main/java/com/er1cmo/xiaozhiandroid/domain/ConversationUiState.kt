@@ -15,6 +15,7 @@ data class ConversationUiState(
     val otaStatus: String = "未请求",
     val websocketStatus: String = "未连接",
     val sessionId: String = "暂无",
+    val audioUplinkStatus: String = "未开始",
     val otaUrl: String = "https://api.tenclass.net/xiaozhi/ota/",
     val authorizationUrl: String = "https://xiaozhi.me/",
     val websocketUrl: String = "等待 OTA 下发",
