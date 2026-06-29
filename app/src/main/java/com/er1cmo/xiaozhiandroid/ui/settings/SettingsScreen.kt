@@ -2,6 +2,7 @@ package com.er1cmo.xiaozhiandroid.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -103,7 +104,7 @@ fun SettingsScreen(
 @Composable
 private fun SettingsGroup(
     title: String,
-    content: @Composable Column.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
