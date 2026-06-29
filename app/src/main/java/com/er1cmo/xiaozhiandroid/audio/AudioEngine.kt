@@ -144,8 +144,8 @@ class AudioEngine(
         if (playbackRunning) {
             stopPlayback(onLog, onStatusChanged)
         }
-        onStatusChanged("等待 TTS 音频")
-        onLog("TTS start：已准备接收并播放下行音频")
+        onStatusChanged("TTS 缓冲中")
+        onLog("TTS start：等待预缓冲后播放下行音频")
     }
 
     fun markTtsStop(
@@ -183,25 +183,45 @@ class AudioEngine(
         val queue = PlaybackQueue()
         playbackQueue = queue
         playbackRunning = true
-        onStatusChanged("播放启动中")
+        onStatusChanged("TTS 缓冲中，目标 ${PREBUFFER_TARGET_FRAMES} 帧")
 
         playbackJob = appScope.launch(Dispatchers.IO) {
             var decoder: OpusDecoder? = null
             var player: AudioPlayer? = null
             var opusFrames = 0
             var pcmBytes = 0L
+            var playbackStarted = false
+            var idleCount = 0
+            val prebufferDeadlineAt = System.currentTimeMillis() + PREBUFFER_MAX_WAIT_MS
             try {
                 decoder = OpusDecoder()
                 player = AudioPlayer()
-                player.play()
-                onStatusChanged("播放中")
                 onLog(
-                    "TTS 播放启动：Opus -> PCM16，" +
-                        "${AudioConstants.OUTPUT_SAMPLE_RATE}Hz/mono AudioTrack",
+                    "TTS 播放准备：Opus -> PCM16，" +
+                        "${AudioConstants.OUTPUT_SAMPLE_RATE}Hz/mono AudioTrack，预缓冲 ${PREBUFFER_TARGET_FRAMES} 帧",
                 )
 
                 while (playbackRunning && generation == playbackGeneration) {
-                    val opus = queue.receiveOrNull(PLAYBACK_IDLE_TIMEOUT_MS) ?: break
+                    val waitMs = if (playbackStarted) {
+                        PLAYBACK_IDLE_TIMEOUT_MS
+                    } else {
+                        PREBUFFER_FRAME_WAIT_MS
+                    }
+                    val opus = queue.receiveOrNull(waitMs)
+                    if (opus == null) {
+                        if (!playbackStarted && System.currentTimeMillis() < prebufferDeadlineAt) {
+                            continue
+                        }
+                        if (playbackStarted) {
+                            idleCount += 1
+                            if (idleCount <= MAX_IDLE_POLLS_AFTER_PLAYBACK) {
+                                continue
+                            }
+                        }
+                        break
+                    }
+                    idleCount = 0
+
                     val pcmFrames = decoder.decode(opus)
                     opusFrames += 1
                     for (pcm in pcmFrames) {
@@ -210,10 +230,24 @@ class AudioEngine(
                         pcmBytes += pcm.size
                     }
 
-                    if (opusFrames > 0 && opusFrames % DOWNLINK_LOG_INTERVAL_PACKETS == 0) {
-                        onStatusChanged("播放中，已解码 ${opusFrames} 帧")
-                        onLog("TTS 已解码播放 ${opusFrames} 个 Opus 帧")
+                    if (!playbackStarted && shouldStartPlayback(opusFrames, prebufferDeadlineAt)) {
+                        player.play()
+                        playbackStarted = true
+                        onStatusChanged("播放中，已预缓冲 ${opusFrames} 帧")
+                        onLog("TTS 预缓冲完成：${opusFrames} 帧，PCM ${pcmBytes}B，开始播放")
                     }
+
+                    if (playbackStarted && opusFrames > 0 && opusFrames % DOWNLINK_LOG_INTERVAL_PACKETS == 0) {
+                        onStatusChanged("播放中，已解码 ${opusFrames} 帧，队列 ${queue.depth()} 帧")
+                        onLog("TTS 已解码播放 ${opusFrames} 个 Opus 帧，队列 ${queue.depth()} 帧")
+                    }
+                }
+
+                if (!playbackStarted && opusFrames > 0 && generation == playbackGeneration) {
+                    player.play()
+                    playbackStarted = true
+                    onStatusChanged("播放中，尾帧补播")
+                    onLog("TTS 预缓冲不足但已有 ${opusFrames} 帧，执行尾帧补播")
                 }
             } catch (exception: Exception) {
                 if (generation == playbackGeneration) {
@@ -221,6 +255,10 @@ class AudioEngine(
                     onLog("TTS 播放异常：${exception.message ?: exception::class.java.simpleName}")
                 }
             } finally {
+                // Let AudioTrack drain the last buffered samples briefly before releasing.
+                if (playbackStarted && opusFrames > 0) {
+                    runCatching { Thread.sleep(PLAYBACK_DRAIN_GRACE_MS) }
+                }
                 runCatching { player?.release() }
                 runCatching { decoder?.release() }
                 if (generation == playbackGeneration) {
@@ -238,9 +276,21 @@ class AudioEngine(
         return queue
     }
 
+    private fun shouldStartPlayback(
+        opusFrames: Int,
+        deadlineAt: Long,
+    ): Boolean {
+        return opusFrames >= PREBUFFER_TARGET_FRAMES || System.currentTimeMillis() >= deadlineAt
+    }
+
     private companion object {
         const val UPLINK_LOG_INTERVAL_PACKETS = 50
         const val DOWNLINK_LOG_INTERVAL_PACKETS = 50
-        const val PLAYBACK_IDLE_TIMEOUT_MS = 900L
+        const val PREBUFFER_TARGET_FRAMES = 10
+        const val PREBUFFER_MAX_WAIT_MS = 260L
+        const val PREBUFFER_FRAME_WAIT_MS = 20L
+        const val PLAYBACK_IDLE_TIMEOUT_MS = 350L
+        const val MAX_IDLE_POLLS_AFTER_PLAYBACK = 3
+        const val PLAYBACK_DRAIN_GRACE_MS = 180L
     }
 }

@@ -1,31 +1,47 @@
 package com.er1cmo.xiaozhiandroid.audio
 
-import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withTimeoutOrNull
 
 class PlaybackQueue(
     capacity: Int = DEFAULT_CAPACITY,
 ) {
     private val channel = Channel<ByteArray>(capacity)
+    private val queuedFrames = AtomicInteger(0)
 
     fun offer(frame: ByteArray): Boolean {
-        return channel.trySend(frame).isSuccess
+        val accepted = channel.trySend(frame).isSuccess
+        if (accepted) {
+            queuedFrames.incrementAndGet()
+        }
+        return accepted
     }
 
     suspend fun receiveOrNull(timeoutMs: Long = 0L): ByteArray? {
-        return if (timeoutMs > 0L) {
+        val frame = if (timeoutMs > 0L) {
             withTimeoutOrNull(timeoutMs) {
                 channel.receiveCatching().getOrNull()
             }
         } else {
             channel.receiveCatching().getOrNull()
         }
+        if (frame != null) {
+            queuedFrames.updateAndGet { current -> (current - 1).coerceAtLeast(0) }
+        }
+        return frame
     }
 
+    fun depth(): Int = queuedFrames.get().coerceAtLeast(0)
+
     fun clear() {
-        while (channel.tryReceive().isSuccess) {
-            // Drop queued frames.
+        while (true) {
+            val frame = channel.tryReceive().getOrNull() ?: break
+            if (frame.isNotEmpty()) {
+                queuedFrames.updateAndGet { current -> (current - 1).coerceAtLeast(0) }
+            }
         }
+        queuedFrames.set(0)
     }
 
     fun close() {
