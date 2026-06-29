@@ -66,7 +66,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                text = "Phase 5 已接入 TTS 下行 Opus 解码和 AudioTrack 播放，后续阶段继续优化 AEC、自动对话和 MCP。",
+                text = "Phase 5 已接入 TTS 下行 Opus 解码和 AudioTrack 播放，当前修正了 Android MediaCodec Opus 解码输出 48kHz PCM 时的播放采样率。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -97,7 +97,7 @@ fun SettingsScreen(
                 SettingRow(label = "输入格式", value = "PCM16 / 16kHz / 单声道")
                 SettingRow(label = "上行帧长", value = "20ms / 320 samples / 640B PCM")
                 SettingRow(label = "上行编码器", value = "Android MediaCodec Opus")
-                SettingRow(label = "下行播放", value = "Opus -> PCM16 / 24kHz / AudioTrack")
+                SettingRow(label = "下行播放", value = "Opus -> PCM16 / 48kHz / AudioTrack")
             }
 
             SettingsGroup(title = "后续阶段入口") {
