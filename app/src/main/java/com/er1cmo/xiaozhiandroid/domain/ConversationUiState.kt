@@ -10,6 +10,8 @@ data class ConversationUiState(
     val serialNumber: String = "未生成",
     val hmacKeyStatus: String = "未生成",
     val activationStatus: String = "未开始",
+    val activationCode: String = "暂无",
+    val activationMessage: String = "暂无",
     val otaStatus: String = "未请求",
     val websocketStatus: String = "未连接",
     val otaUrl: String = "https://api.tenclass.net/xiaozhi/ota/",

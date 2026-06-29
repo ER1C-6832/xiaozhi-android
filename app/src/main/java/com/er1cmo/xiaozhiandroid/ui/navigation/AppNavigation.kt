@@ -5,10 +5,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
 import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
+import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
 import com.er1cmo.xiaozhiandroid.ui.main.MainScreen
 import com.er1cmo.xiaozhiandroid.ui.main.MainViewModel
 import com.er1cmo.xiaozhiandroid.ui.settings.SettingsScreen
@@ -21,9 +23,18 @@ private enum class AppScreen {
 @Composable
 fun AppNavigation() {
     val appContext = LocalContext.current.applicationContext
+    val appScope = rememberCoroutineScope()
     val configRepository = remember { ConfigRepository(appContext) }
     val deviceIdentityManager = remember { DeviceIdentityManager(configRepository) }
-    val viewModel = remember { MainViewModel(configRepository, deviceIdentityManager) }
+    val otaActivationClient = remember { OtaActivationClient(configRepository) }
+    val viewModel = remember {
+        MainViewModel(
+            configRepository = configRepository,
+            deviceIdentityManager = deviceIdentityManager,
+            otaActivationClient = otaActivationClient,
+            appScope = appScope,
+        )
+    }
     var currentScreen by remember { mutableStateOf(AppScreen.Main) }
 
     LaunchedEffect(viewModel) {

@@ -1,11 +1,10 @@
 package com.er1cmo.xiaozhiandroid.data.config
 
 /**
- * App-wide persisted configuration for Phase 2A.
+ * App-wide persisted configuration.
  *
- * This intentionally mirrors the py-xiaozhi idea of keeping stable device
- * identity and network configuration, but uses Android DataStore instead of
- * desktop config files.
+ * The model follows py-xiaozhi's idea of keeping stable identity, OTA and
+ * activation state, while using Android DataStore instead of desktop files.
  */
 data class AppConfig(
     val clientId: String = "",
@@ -13,6 +12,9 @@ data class AppConfig(
     val serialNumber: String = "",
     val hmacKey: String = "",
     val activationStatus: Boolean = false,
+    val activationCode: String = "",
+    val activationChallenge: String = "",
+    val activationMessage: String = "",
     val otaUrl: String = DEFAULT_OTA_URL,
     val authorizationUrl: String = DEFAULT_AUTHORIZATION_URL,
     val websocketUrl: String = "",
@@ -25,6 +27,9 @@ data class AppConfig(
 
     val websocketUrlDisplay: String
         get() = websocketUrl.ifBlank { "等待 OTA 下发" }
+
+    val activationCodeDisplay: String
+        get() = activationCode.ifBlank { "暂无" }
 
     companion object {
         const val DEFAULT_OTA_URL = "https://api.tenclass.net/xiaozhi/ota/"

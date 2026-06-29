@@ -35,6 +35,9 @@ class ConfigRepository(context: Context) {
                 serialNumber = preferences[ConfigKeys.SERIAL_NUMBER].orEmpty(),
                 hmacKey = preferences[ConfigKeys.HMAC_KEY].orEmpty(),
                 activationStatus = preferences[ConfigKeys.ACTIVATION_STATUS] ?: false,
+                activationCode = preferences[ConfigKeys.ACTIVATION_CODE].orEmpty(),
+                activationChallenge = preferences[ConfigKeys.ACTIVATION_CHALLENGE].orEmpty(),
+                activationMessage = preferences[ConfigKeys.ACTIVATION_MESSAGE].orEmpty(),
                 otaUrl = preferences[ConfigKeys.OTA_URL] ?: AppConfig.DEFAULT_OTA_URL,
                 authorizationUrl = preferences[ConfigKeys.AUTHORIZATION_URL]
                     ?: AppConfig.DEFAULT_AUTHORIZATION_URL,
@@ -74,6 +77,26 @@ class ConfigRepository(context: Context) {
     suspend fun setActivationStatus(activated: Boolean) {
         appContext.xiaozhiConfigDataStore.edit { preferences ->
             preferences[ConfigKeys.ACTIVATION_STATUS] = activated
+        }
+    }
+
+    suspend fun saveActivationData(
+        code: String,
+        challenge: String,
+        message: String,
+    ) {
+        appContext.xiaozhiConfigDataStore.edit { preferences ->
+            preferences[ConfigKeys.ACTIVATION_CODE] = code
+            preferences[ConfigKeys.ACTIVATION_CHALLENGE] = challenge
+            preferences[ConfigKeys.ACTIVATION_MESSAGE] = message
+        }
+    }
+
+    suspend fun clearActivationData() {
+        appContext.xiaozhiConfigDataStore.edit { preferences ->
+            preferences.remove(ConfigKeys.ACTIVATION_CODE)
+            preferences.remove(ConfigKeys.ACTIVATION_CHALLENGE)
+            preferences.remove(ConfigKeys.ACTIVATION_MESSAGE)
         }
     }
 

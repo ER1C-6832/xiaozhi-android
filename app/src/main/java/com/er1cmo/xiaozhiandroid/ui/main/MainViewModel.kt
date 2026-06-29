@@ -6,21 +6,29 @@ import androidx.compose.runtime.setValue
 import com.er1cmo.xiaozhiandroid.data.config.AppConfig
 import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
 import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
+import com.er1cmo.xiaozhiandroid.data.ota.ActivationState
+import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
 import com.er1cmo.xiaozhiandroid.domain.ConversationState
 import com.er1cmo.xiaozhiandroid.domain.ConversationUiState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 class MainViewModel(
     private val configRepository: ConfigRepository,
     private val deviceIdentityManager: DeviceIdentityManager,
+    private val otaActivationClient: OtaActivationClient,
+    private val appScope: CoroutineScope,
 ) {
     var uiState by mutableStateOf(ConversationUiState())
         private set
 
     private var hasStartedConfigCollection = false
+    private var isOtaActivationRunning = false
 
     suspend fun initialize() {
         if (hasStartedConfigCollection) return
@@ -69,13 +77,51 @@ class MainViewModel(
         appendLocalLog("打断对话：已回到待命（后续发送 abort 消息）")
     }
 
-    fun simulateConnectEntry() {
+    fun startOtaActivation() {
+        if (isOtaActivationRunning) {
+            appendLocalLog("OTA / 激活流程正在运行，请稍候")
+            return
+        }
+
+        isOtaActivationRunning = true
         uiState = uiState.copy(
             conversationState = ConversationState.Connecting,
-            otaStatus = "Phase 2B 接入 OTA 请求",
+            otaStatus = ActivationState.OtaRequesting.label,
             websocketStatus = "等待 OTA 下发 WebSocket 配置",
         )
-        appendLocalLog("连接入口已触发：Phase 2A 已有配置与设备身份，下一步接入 OTA / 激活")
+        appendLocalLog("连接入口已触发：开始执行 OTA / 激活流程")
+
+        appScope.launch {
+            try {
+                val outcome = otaActivationClient.runOtaAndActivation { message ->
+                    appendLocalLogFromAnyThread(message)
+                }
+                uiState = uiState.copy(
+                    conversationState = when (outcome.state) {
+                        ActivationState.Activated,
+                        ActivationState.OtaSuccess -> ConversationState.Connected
+                        ActivationState.Failed -> ConversationState.Error
+                        else -> ConversationState.Connecting
+                    },
+                    otaStatus = outcome.state.label,
+                    websocketStatus = if (uiState.websocketUrl != "等待 OTA 下发") {
+                        "已获取配置，待连接"
+                    } else {
+                        uiState.websocketStatus
+                    },
+                )
+                appendLocalLog(outcome.message)
+            } catch (exception: Exception) {
+                uiState = uiState.copy(
+                    conversationState = ConversationState.Error,
+                    otaStatus = "失败",
+                    websocketStatus = "未连接",
+                )
+                appendLocalLog("OTA / 激活失败：${exception.message ?: exception::class.java.simpleName}")
+            } finally {
+                isOtaActivationRunning = false
+            }
+        }
     }
 
     fun sendText() {
@@ -99,6 +145,12 @@ class MainViewModel(
         uiState = uiState.copy(debugLogs = nextLogs)
     }
 
+    private fun appendLocalLogFromAnyThread(message: String) {
+        appScope.launch(Dispatchers.Main.immediate) {
+            appendLocalLog(message)
+        }
+    }
+
     private fun applyConfig(config: AppConfig) {
         val hasWebSocketUrl = config.websocketUrl.isNotBlank()
         uiState = uiState.copy(
@@ -106,7 +158,13 @@ class MainViewModel(
             deviceId = config.deviceId.ifBlank { "未生成" },
             serialNumber = config.serialNumber.ifBlank { "未生成" },
             hmacKeyStatus = if (config.hmacKey.isBlank()) "未生成" else "已生成（隐藏）",
-            activationStatus = if (config.activationStatus) "已激活" else "未激活",
+            activationStatus = when {
+                config.activationStatus -> "已激活"
+                config.activationCode.isNotBlank() -> "等待激活"
+                else -> "未激活"
+            },
+            activationCode = config.activationCodeDisplay,
+            activationMessage = config.activationMessage.ifBlank { "暂无" },
             otaUrl = config.otaUrl,
             authorizationUrl = config.authorizationUrl,
             websocketUrl = config.websocketUrlDisplay,
@@ -126,6 +184,6 @@ class MainViewModel(
     }
 
     private companion object {
-        const val MAX_LOG_LINES = 80
+        const val MAX_LOG_LINES = 100
     }
 }

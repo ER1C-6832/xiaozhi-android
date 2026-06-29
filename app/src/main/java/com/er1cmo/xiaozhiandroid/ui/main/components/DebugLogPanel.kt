@@ -68,6 +68,9 @@ fun DebugLogPanel(
             DebugInfoLine(label = "设备 ID", value = uiState.deviceId)
             DebugInfoLine(label = "Client ID", value = uiState.clientId)
             DebugInfoLine(label = "激活状态", value = uiState.activationStatus)
+            if (uiState.activationCode != "暂无") {
+                DebugInfoLine(label = "激活码", value = uiState.activationCode)
+            }
             DebugInfoLine(label = "OTA 状态", value = uiState.otaStatus)
             DebugInfoLine(label = "WebSocket", value = uiState.websocketStatus)
             DebugInfoLine(label = "最近 JSON", value = uiState.lastServerJson)
@@ -77,7 +80,7 @@ fun DebugLogPanel(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(130.dp)
+                        .height(150.dp)
                         .background(
                             color = MaterialTheme.colorScheme.surface,
                             shape = RoundedCornerShape(12.dp),
