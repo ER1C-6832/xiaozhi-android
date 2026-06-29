@@ -66,7 +66,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                text = "Phase 4 已接入麦克风录音、Opus 编码和 WebSocket 音频上行，TTS 解码播放留到 Phase 5。",
+                text = "Phase 5 已接入 TTS 下行 Opus 解码和 AudioTrack 播放，后续阶段继续优化 AEC、自动对话和 MCP。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -93,14 +93,15 @@ fun SettingsScreen(
 
             SettingsGroup(title = "音频配置") {
                 SettingRow(label = "上行状态", value = uiState.audioUplinkStatus)
+                SettingRow(label = "播放状态", value = uiState.audioPlaybackStatus)
                 SettingRow(label = "输入格式", value = "PCM16 / 16kHz / 单声道")
-                SettingRow(label = "帧长", value = "20ms / 320 samples / 640B PCM")
-                SettingRow(label = "编码器", value = "Android MediaCodec Opus")
-                SettingRow(label = "下行播放", value = "Phase 5 接入 Opus 解码与 AudioTrack")
+                SettingRow(label = "上行帧长", value = "20ms / 320 samples / 640B PCM")
+                SettingRow(label = "上行编码器", value = "Android MediaCodec Opus")
+                SettingRow(label = "下行播放", value = "Opus -> PCM16 / 24kHz / AudioTrack")
             }
 
             SettingsGroup(title = "后续阶段入口") {
-                SettingRow(label = "TTS 播放", value = "Phase 5 接入 Opus 解码、AudioTrack")
+                SettingRow(label = "AEC", value = "后续调研 Android / WebRTC AEC")
                 SettingRow(label = "MCP 工具", value = "Phase 8 接入 Android 本机 MCP")
                 SettingRow(label = "摄像头", value = "后续接入 CameraX")
             }

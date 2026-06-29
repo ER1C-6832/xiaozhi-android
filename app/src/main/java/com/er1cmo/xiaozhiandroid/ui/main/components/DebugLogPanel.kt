@@ -75,6 +75,7 @@ fun DebugLogPanel(
             DebugInfoLine(label = "WebSocket", value = uiState.websocketStatus)
             DebugInfoLine(label = "Session ID", value = uiState.sessionId)
             DebugInfoLine(label = "音频上行", value = uiState.audioUplinkStatus)
+            DebugInfoLine(label = "TTS 播放", value = uiState.audioPlaybackStatus)
             DebugInfoLine(label = "最近 JSON", value = uiState.lastServerJson)
 
             if (uiState.isDebugExpanded) {
@@ -82,7 +83,7 @@ fun DebugLogPanel(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(170.dp)
+                        .height(150.dp)
                         .background(
                             color = MaterialTheme.colorScheme.surface,
                             shape = RoundedCornerShape(12.dp),

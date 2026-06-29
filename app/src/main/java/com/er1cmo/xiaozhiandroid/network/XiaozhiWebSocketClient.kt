@@ -104,7 +104,7 @@ class XiaozhiWebSocketClient(
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                postBinaryFrame(callbacks, bytes.size)
+                postBinaryFrame(callbacks, bytes.toByteArray())
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -241,9 +241,9 @@ class XiaozhiWebSocketClient(
         }
     }
 
-    private fun postBinaryFrame(callbacks: Callbacks, size: Int) {
+    private fun postBinaryFrame(callbacks: Callbacks, frame: ByteArray) {
         appScope.launch(Dispatchers.Main.immediate) {
-            callbacks.onBinaryFrame(size)
+            callbacks.onBinaryFrame(frame)
         }
     }
 
@@ -269,7 +269,7 @@ class XiaozhiWebSocketClient(
         val onLog: (String) -> Unit,
         val onConnected: (sessionId: String) -> Unit,
         val onIncomingJson: (prettyJson: String, type: String) -> Unit,
-        val onBinaryFrame: (size: Int) -> Unit,
+        val onBinaryFrame: (ByteArray) -> Unit,
         val onClosed: (reason: String) -> Unit,
         val onError: (message: String) -> Unit,
         val onNetworkStateChanged: (NetworkState) -> Unit,

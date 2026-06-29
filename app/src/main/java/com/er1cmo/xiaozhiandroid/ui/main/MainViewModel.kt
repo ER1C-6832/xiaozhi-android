@@ -20,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 class MainViewModel(
     private val configRepository: ConfigRepository,
@@ -35,6 +36,8 @@ class MainViewModel(
     private var hasStartedConfigCollection = false
     private var isOtaActivationRunning = false
     private var isWebSocketConnecting = false
+    private var downlinkOpusFrames = 0
+    private var downlinkBytes = 0L
 
     suspend fun initialize() {
         if (hasStartedConfigCollection) return
@@ -89,12 +92,20 @@ class MainViewModel(
                 conversationState = ConversationState.Idle,
                 audioUplinkStatus = "未连接，无法录音上传",
             )
-            appendLocalLog("按住后说话失败：WebSocket 未连接，请先点击连接入口")
+            appendLocalLog("按住后说话失败：WebSocket 未连接或已断开，请重新点击连接入口")
             return
         }
         if (audioEngine.isRecording()) {
             appendLocalLog("音频上行已在运行")
             return
+        }
+        if (audioEngine.isPlaybackActive() || uiState.conversationState == ConversationState.Speaking) {
+            audioEngine.stopPlayback(
+                onLog = ::appendLocalLogFromAnyThread,
+                onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+            )
+            val aborted = xiaozhiWebSocketClient.sendAbort()
+            appendLocalLog(if (aborted) "开始录音前已打断当前 TTS 播放" else "开始录音前停止了本地 TTS 播放")
         }
 
         val startSent = xiaozhiWebSocketClient.sendStartManualListening()
@@ -142,6 +153,10 @@ class MainViewModel(
             audioEngine.stopRecording()
             appendLocalLog("打断对话：已停止本地录音上行")
         }
+        audioEngine.stopPlayback(
+            onLog = ::appendLocalLogFromAnyThread,
+            onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+        )
         val sent = if (xiaozhiWebSocketClient.isConnected()) {
             xiaozhiWebSocketClient.sendAbort()
         } else {
@@ -205,14 +220,14 @@ class MainViewModel(
         }
 
         if (!xiaozhiWebSocketClient.isConnected()) {
-            appendLocalLog("发送文本失败：WebSocket 未连接，请先点击连接入口")
+            appendLocalLog("发送文本失败：WebSocket 未连接或已断开，请重新点击连接入口")
             return
         }
 
         val sent = xiaozhiWebSocketClient.sendWakeText(text)
         if (!sent) {
             uiState = uiState.copy(conversationState = ConversationState.Error)
-            appendLocalLog("发送 listen/detect/text 失败")
+            appendLocalLog("发送 listen/detect/text 失败，请重新点击连接入口后再试")
             return
         }
 
@@ -309,21 +324,17 @@ class MainViewModel(
                         )
                     },
                     onIncomingJson = { prettyJson, type ->
-                        val preview = prettyJson.take(MAX_JSON_PREVIEW_LENGTH)
-                        uiState = uiState.copy(
-                            conversationState = when (type) {
-                                "tts" -> ConversationState.Speaking
-                                else -> ConversationState.Connected
-                            },
-                            lastServerJson = preview,
-                        )
-                        appendLocalLog("收到服务端 JSON：type=$type")
+                        handleIncomingJson(prettyJson, type)
                     },
-                    onBinaryFrame = { size ->
-                        appendLocalLog("收到二进制音频帧：${size}B（Phase 5 解码播放）")
+                    onBinaryFrame = { frame ->
+                        handleIncomingAudioFrame(frame)
                     },
                     onClosed = { reason ->
                         audioEngine.stopRecording()
+                        audioEngine.stopPlayback(
+                            onLog = ::appendLocalLogFromAnyThread,
+                            onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+                        )
                         uiState = uiState.copy(
                             conversationState = ConversationState.Disconnected,
                             websocketStatus = "已断开",
@@ -333,6 +344,10 @@ class MainViewModel(
                     },
                     onError = { message ->
                         audioEngine.stopRecording()
+                        audioEngine.stopPlayback(
+                            onLog = ::appendLocalLogFromAnyThread,
+                            onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+                        )
                         uiState = uiState.copy(
                             conversationState = ConversationState.Error,
                             websocketStatus = "错误",
@@ -365,6 +380,68 @@ class MainViewModel(
         return connected
     }
 
+    private fun handleIncomingJson(
+        prettyJson: String,
+        type: String,
+    ) {
+        val preview = prettyJson.take(MAX_JSON_PREVIEW_LENGTH)
+        val state = jsonState(prettyJson)
+        uiState = uiState.copy(lastServerJson = preview)
+
+        when (type) {
+            "tts" -> handleTtsJson(state)
+            else -> {
+                uiState = uiState.copy(conversationState = ConversationState.Connected)
+            }
+        }
+        if (type == "tts" && state.isNotBlank()) {
+            appendLocalLog("收到服务端 JSON：type=$type/state=$state")
+        } else {
+            appendLocalLog("收到服务端 JSON：type=$type")
+        }
+    }
+
+    private fun handleTtsJson(state: String) {
+        when (state) {
+            "start" -> {
+                downlinkOpusFrames = 0
+                downlinkBytes = 0L
+                audioEngine.markTtsStart(
+                    onLog = ::appendLocalLogFromAnyThread,
+                    onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+                )
+                uiState = uiState.copy(conversationState = ConversationState.Speaking)
+            }
+            "stop" -> {
+                audioEngine.markTtsStop(
+                    onLog = ::appendLocalLogFromAnyThread,
+                    onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+                )
+                uiState = uiState.copy(conversationState = ConversationState.Connected)
+            }
+            else -> {
+                uiState = uiState.copy(conversationState = ConversationState.Speaking)
+            }
+        }
+    }
+
+    private fun handleIncomingAudioFrame(frame: ByteArray) {
+        downlinkOpusFrames += 1
+        downlinkBytes += frame.size
+        audioEngine.queuePlaybackFrame(
+            opusFrame = frame,
+            onLog = ::appendLocalLogFromAnyThread,
+            onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+        )
+        uiState = uiState.copy(
+            conversationState = ConversationState.Speaking,
+            audioPlaybackStatus = "播放中，收到 ${downlinkOpusFrames} 帧",
+        )
+        if (downlinkOpusFrames == 1 || downlinkOpusFrames % DOWNLINK_LOG_INTERVAL_PACKETS == 0) {
+            appendLocalLog("收到 TTS Opus 音频帧：${downlinkOpusFrames} 帧，累计 ${downlinkBytes}B")
+        }
+    }
+
     private fun appendLocalLogFromAnyThread(message: String) {
         appScope.launch(Dispatchers.Main.immediate) {
             appendLocalLog(message)
@@ -374,6 +451,12 @@ class MainViewModel(
     private fun updateAudioStatusFromAnyThread(status: String) {
         appScope.launch(Dispatchers.Main.immediate) {
             uiState = uiState.copy(audioUplinkStatus = status)
+        }
+    }
+
+    private fun updateAudioPlaybackStatusFromAnyThread(status: String) {
+        appScope.launch(Dispatchers.Main.immediate) {
+            uiState = uiState.copy(audioPlaybackStatus = status)
         }
     }
 
@@ -406,6 +489,10 @@ class MainViewModel(
         )
     }
 
+    private fun jsonState(prettyJson: String): String {
+        return runCatching { JSONObject(prettyJson).optString("state", "") }.getOrDefault("")
+    }
+
     private fun timestamp(): String {
         return SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
     }
@@ -413,5 +500,6 @@ class MainViewModel(
     private companion object {
         const val MAX_LOG_LINES = 160
         const val MAX_JSON_PREVIEW_LENGTH = 1_500
+        const val DOWNLINK_LOG_INTERVAL_PACKETS = 50
     }
 }

@@ -14,10 +14,17 @@ class AudioEngine(
     @Volatile
     private var recording = false
 
+    @Volatile
+    private var playbackRunning = false
+
     private var recordingJob: Job? = null
+    private var playbackJob: Job? = null
     private var activeAudioRecord: AudioRecord? = null
+    private var playbackQueue: PlaybackQueue? = null
 
     fun isRecording(): Boolean = recording
+
+    fun isPlaybackActive(): Boolean = playbackRunning
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     fun startRecording(
@@ -69,7 +76,7 @@ class AudioEngine(
                         opusPackets += 1
                     }
 
-                    if (opusPackets > 0 && opusPackets % LOG_INTERVAL_PACKETS == 0) {
+                    if (opusPackets > 0 && opusPackets % UPLINK_LOG_INTERVAL_PACKETS == 0) {
                         onStatusChanged("上行中，已发送 ${opusPackets} 帧")
                         onLog("已发送 Opus 音频帧：${opusPackets}")
                     }
@@ -95,13 +102,130 @@ class AudioEngine(
         runCatching { activeAudioRecord?.stop() }
     }
 
+    fun queuePlaybackFrame(
+        opusFrame: ByteArray,
+        onLog: (String) -> Unit,
+        onStatusChanged: (String) -> Unit,
+    ) {
+        startPlaybackIfNeeded(onLog, onStatusChanged)
+        val accepted = playbackQueue?.offer(opusFrame) ?: false
+        if (!accepted) {
+            onLog("TTS 播放队列已满，丢弃 ${opusFrame.size}B 音频帧")
+        }
+    }
+
+    fun stopPlayback(
+        onLog: (String) -> Unit,
+        onStatusChanged: (String) -> Unit,
+    ) {
+        if (!playbackRunning) {
+            playbackQueue?.clear()
+            onStatusChanged("未播放")
+            return
+        }
+        playbackRunning = false
+        playbackQueue?.clear()
+        playbackQueue?.close()
+        playbackQueue = null
+        playbackJob?.cancel()
+        playbackJob = null
+        onStatusChanged("已停止播放")
+        onLog("TTS 播放已打断并清空队列")
+    }
+
+    fun markTtsStart(
+        onLog: (String) -> Unit,
+        onStatusChanged: (String) -> Unit,
+    ) {
+        stopPlayback(onLog, onStatusChanged)
+        onStatusChanged("等待 TTS 音频")
+        onLog("TTS start：已准备接收并播放下行音频")
+    }
+
+    fun markTtsStop(
+        onLog: (String) -> Unit,
+        onStatusChanged: (String) -> Unit,
+    ) {
+        if (playbackRunning) {
+            playbackQueue?.close()
+            onStatusChanged("等待播放队列结束")
+            onLog("TTS stop：服务端结束下发，播放队列将自然清空")
+        } else {
+            onStatusChanged("TTS 已结束")
+            onLog("TTS stop：当前没有待播放音频")
+        }
+    }
+
     fun release() {
         stopRecording()
         recordingJob?.cancel()
         recordingJob = null
+        stopPlayback(
+            onLog = {},
+            onStatusChanged = {},
+        )
+    }
+
+    private fun startPlaybackIfNeeded(
+        onLog: (String) -> Unit,
+        onStatusChanged: (String) -> Unit,
+    ) {
+        if (playbackRunning && playbackQueue != null) return
+
+        val queue = PlaybackQueue()
+        playbackQueue = queue
+        playbackRunning = true
+        onStatusChanged("播放启动中")
+
+        playbackJob = appScope.launch(Dispatchers.IO) {
+            var decoder: OpusDecoder? = null
+            var player: AudioPlayer? = null
+            var opusFrames = 0
+            var pcmBytes = 0L
+            try {
+                decoder = OpusDecoder()
+                player = AudioPlayer()
+                player.play()
+                onStatusChanged("播放中")
+                onLog(
+                    "TTS 播放启动：Opus -> PCM16，" +
+                        "${AudioConstants.OUTPUT_SAMPLE_RATE}Hz/mono AudioTrack",
+                )
+
+                while (playbackRunning) {
+                    val opus = queue.receiveOrNull() ?: break
+                    val pcmFrames = decoder.decode(opus)
+                    opusFrames += 1
+                    for (pcm in pcmFrames) {
+                        if (pcm.isEmpty()) continue
+                        player.writePcm(pcm)
+                        pcmBytes += pcm.size
+                    }
+
+                    if (opusFrames > 0 && opusFrames % DOWNLINK_LOG_INTERVAL_PACKETS == 0) {
+                        onStatusChanged("播放中，已解码 ${opusFrames} 帧")
+                        onLog("TTS 已解码播放 ${opusFrames} 个 Opus 帧")
+                    }
+                }
+            } catch (exception: Exception) {
+                onStatusChanged("播放失败")
+                onLog("TTS 播放异常：${exception.message ?: exception::class.java.simpleName}")
+            } finally {
+                playbackRunning = false
+                playbackQueue?.clear()
+                playbackQueue = null
+                runCatching { player?.release() }
+                runCatching { decoder?.release() }
+                onStatusChanged("已停止，播放 ${opusFrames} 帧")
+                if (opusFrames > 0 || pcmBytes > 0) {
+                    onLog("TTS 播放停止：Opus ${opusFrames} 帧，PCM ${pcmBytes}B")
+                }
+            }
+        }
     }
 
     private companion object {
-        const val LOG_INTERVAL_PACKETS = 50
+        const val UPLINK_LOG_INTERVAL_PACKETS = 50
+        const val DOWNLINK_LOG_INTERVAL_PACKETS = 50
     }
 }
