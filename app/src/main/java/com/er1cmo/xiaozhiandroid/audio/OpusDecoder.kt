@@ -4,13 +4,16 @@ import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaFormat
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.charset.StandardCharsets
 
 /**
  * Android platform Opus decoder wrapper for server TTS binary frames.
  *
- * The xiaozhi WebSocket protocol sends TTS audio as binary Opus frames. This
- * class decodes one raw Opus packet at a time into PCM16 and keeps playback
- * details out of the WebSocket layer.
+ * The xiaozhi WebSocket protocol sends TTS audio as binary Opus frames. Android's
+ * MediaCodec Opus decoder is more stable when it receives the Opus codec-specific
+ * data normally carried by an Ogg/Matroska container, so this wrapper provides a
+ * minimal OpusHead plus codec-delay / seek-preroll buffers.
  */
 class OpusDecoder {
     private val codec: MediaCodec = try {
@@ -35,6 +38,9 @@ class OpusDecoder {
             ).apply {
                 setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_OPUS_INPUT_SIZE)
+                setByteBuffer("csd-0", buildOpusHead())
+                setByteBuffer("csd-1", longToNativeOrderBuffer(CODEC_DELAY_NS))
+                setByteBuffer("csd-2", longToNativeOrderBuffer(SEEK_PREROLL_NS))
             }
             codec.configure(format, null, null, 0)
             codec.start()
@@ -128,5 +134,27 @@ class OpusDecoder {
         const val MAX_OPUS_INPUT_SIZE = 4_096
         const val INPUT_TIMEOUT_US = 10_000L
         const val OUTPUT_TIMEOUT_US = 10_000L
+        const val CODEC_DELAY_NS = 0L
+        const val SEEK_PREROLL_NS = 80_000_000L
+
+        fun buildOpusHead(): ByteBuffer {
+            return ByteBuffer.allocate(19)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .put("OpusHead".toByteArray(StandardCharsets.US_ASCII))
+                .put(1.toByte())
+                .put(AudioConstants.CHANNELS.toByte())
+                .putShort(0.toShort())
+                .putInt(AudioConstants.OUTPUT_SAMPLE_RATE)
+                .putShort(0.toShort())
+                .put(0.toByte())
+                .also { it.flip() }
+        }
+
+        fun longToNativeOrderBuffer(value: Long): ByteBuffer {
+            return ByteBuffer.allocate(8)
+                .order(ByteOrder.nativeOrder())
+                .putLong(value)
+                .also { it.flip() }
+        }
     }
 }

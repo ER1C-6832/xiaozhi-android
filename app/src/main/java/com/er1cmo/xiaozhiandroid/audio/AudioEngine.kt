@@ -17,6 +17,9 @@ class AudioEngine(
     @Volatile
     private var playbackRunning = false
 
+    @Volatile
+    private var playbackGeneration = 0
+
     private var recordingJob: Job? = null
     private var playbackJob: Job? = null
     private var activeAudioRecord: AudioRecord? = null
@@ -107,10 +110,10 @@ class AudioEngine(
         onLog: (String) -> Unit,
         onStatusChanged: (String) -> Unit,
     ) {
-        startPlaybackIfNeeded(onLog, onStatusChanged)
-        val accepted = playbackQueue?.offer(opusFrame) ?: false
+        val queue = startPlaybackIfNeeded(onLog, onStatusChanged)
+        val accepted = queue.offer(opusFrame)
         if (!accepted) {
-            onLog("TTS 播放队列已满，丢弃 ${opusFrame.size}B 音频帧")
+            onLog("TTS 播放队列已满或已关闭，丢弃 ${opusFrame.size}B 音频帧")
         }
     }
 
@@ -118,16 +121,17 @@ class AudioEngine(
         onLog: (String) -> Unit,
         onStatusChanged: (String) -> Unit,
     ) {
-        if (!playbackRunning) {
-            playbackQueue?.clear()
+        val queue = playbackQueue
+        if (!playbackRunning && queue == null) {
             onStatusChanged("未播放")
             return
         }
+
+        playbackGeneration += 1
         playbackRunning = false
-        playbackQueue?.clear()
-        playbackQueue?.close()
         playbackQueue = null
-        playbackJob?.cancel()
+        queue?.clear()
+        queue?.close()
         playbackJob = null
         onStatusChanged("已停止播放")
         onLog("TTS 播放已打断并清空队列")
@@ -137,7 +141,9 @@ class AudioEngine(
         onLog: (String) -> Unit,
         onStatusChanged: (String) -> Unit,
     ) {
-        stopPlayback(onLog, onStatusChanged)
+        if (playbackRunning) {
+            stopPlayback(onLog, onStatusChanged)
+        }
         onStatusChanged("等待 TTS 音频")
         onLog("TTS start：已准备接收并播放下行音频")
     }
@@ -147,9 +153,8 @@ class AudioEngine(
         onStatusChanged: (String) -> Unit,
     ) {
         if (playbackRunning) {
-            playbackQueue?.close()
-            onStatusChanged("等待播放队列结束")
-            onLog("TTS stop：服务端结束下发，播放队列将自然清空")
+            onStatusChanged("等待播放队列自然结束")
+            onLog("TTS stop：服务端结束下发，等待音频队列自然清空")
         } else {
             onStatusChanged("TTS 已结束")
             onLog("TTS stop：当前没有待播放音频")
@@ -169,9 +174,12 @@ class AudioEngine(
     private fun startPlaybackIfNeeded(
         onLog: (String) -> Unit,
         onStatusChanged: (String) -> Unit,
-    ) {
-        if (playbackRunning && playbackQueue != null) return
+    ): PlaybackQueue {
+        val currentQueue = playbackQueue
+        if (playbackRunning && currentQueue != null) return currentQueue
 
+        val generation = playbackGeneration + 1
+        playbackGeneration = generation
         val queue = PlaybackQueue()
         playbackQueue = queue
         playbackRunning = true
@@ -192,8 +200,8 @@ class AudioEngine(
                         "${AudioConstants.OUTPUT_SAMPLE_RATE}Hz/mono AudioTrack",
                 )
 
-                while (playbackRunning) {
-                    val opus = queue.receiveOrNull() ?: break
+                while (playbackRunning && generation == playbackGeneration) {
+                    val opus = queue.receiveOrNull(PLAYBACK_IDLE_TIMEOUT_MS) ?: break
                     val pcmFrames = decoder.decode(opus)
                     opusFrames += 1
                     for (pcm in pcmFrames) {
@@ -208,24 +216,31 @@ class AudioEngine(
                     }
                 }
             } catch (exception: Exception) {
-                onStatusChanged("播放失败")
-                onLog("TTS 播放异常：${exception.message ?: exception::class.java.simpleName}")
+                if (generation == playbackGeneration) {
+                    onStatusChanged("播放失败")
+                    onLog("TTS 播放异常：${exception.message ?: exception::class.java.simpleName}")
+                }
             } finally {
-                playbackRunning = false
-                playbackQueue?.clear()
-                playbackQueue = null
                 runCatching { player?.release() }
                 runCatching { decoder?.release() }
-                onStatusChanged("已停止，播放 ${opusFrames} 帧")
-                if (opusFrames > 0 || pcmBytes > 0) {
-                    onLog("TTS 播放停止：Opus ${opusFrames} 帧，PCM ${pcmBytes}B")
+                if (generation == playbackGeneration) {
+                    playbackRunning = false
+                    playbackQueue?.clear()
+                    playbackQueue = null
+                    playbackJob = null
+                    onStatusChanged("已停止，播放 ${opusFrames} 帧")
+                    if (opusFrames > 0 || pcmBytes > 0) {
+                        onLog("TTS 播放停止：Opus ${opusFrames} 帧，PCM ${pcmBytes}B")
+                    }
                 }
             }
         }
+        return queue
     }
 
     private companion object {
         const val UPLINK_LOG_INTERVAL_PACKETS = 50
         const val DOWNLINK_LOG_INTERVAL_PACKETS = 50
+        const val PLAYBACK_IDLE_TIMEOUT_MS = 900L
     }
 }
