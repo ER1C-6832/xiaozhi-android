@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
 import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
 import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
+import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
 import com.er1cmo.xiaozhiandroid.ui.main.MainScreen
 import com.er1cmo.xiaozhiandroid.ui.main.MainViewModel
 import com.er1cmo.xiaozhiandroid.ui.settings.SettingsScreen
@@ -27,11 +28,18 @@ fun AppNavigation() {
     val configRepository = remember { ConfigRepository(appContext) }
     val deviceIdentityManager = remember { DeviceIdentityManager(configRepository) }
     val otaActivationClient = remember { OtaActivationClient(configRepository) }
+    val xiaozhiWebSocketClient = remember {
+        XiaozhiWebSocketClient(
+            configRepository = configRepository,
+            appScope = appScope,
+        )
+    }
     val viewModel = remember {
         MainViewModel(
             configRepository = configRepository,
             deviceIdentityManager = deviceIdentityManager,
             otaActivationClient = otaActivationClient,
+            xiaozhiWebSocketClient = xiaozhiWebSocketClient,
             appScope = appScope,
         )
     }

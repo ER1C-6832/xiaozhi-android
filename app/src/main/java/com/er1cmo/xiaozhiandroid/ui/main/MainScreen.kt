@@ -71,7 +71,7 @@ fun MainScreen(
             DebugLogPanel(
                 uiState = uiState,
                 onToggleExpanded = viewModel::toggleDebugPanel,
-                onConnectClick = viewModel::startOtaActivation,
+                onConnectClick = viewModel::handleConnectionEntry,
             )
             Spacer(modifier = Modifier.padding(bottom = 8.dp))
         }

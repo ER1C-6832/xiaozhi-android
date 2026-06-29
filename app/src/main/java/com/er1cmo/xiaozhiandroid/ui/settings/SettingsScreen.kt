@@ -66,7 +66,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                text = "Phase 2B 已接入 OTA 请求与 v2 激活轮询；WebSocket hello 将在 Phase 3 接入。",
+                text = "Phase 3 已接入 WebSocket hello 与文本连通性，音频/MCP 仍在后续阶段接入",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -78,8 +78,6 @@ fun SettingsScreen(
                 SettingRow(label = "HMAC 密钥", value = uiState.hmacKeyStatus)
                 SettingRow(label = "激活状态", value = uiState.activationStatus)
                 SettingRow(label = "激活版本", value = uiState.activationVersion)
-                SettingRow(label = "激活码", value = uiState.activationCode)
-                SettingRow(label = "激活提示", value = uiState.activationMessage)
             }
 
             SettingsGroup(title = "网络配置") {
@@ -89,12 +87,14 @@ fun SettingsScreen(
                 SettingRow(label = "访问令牌", value = uiState.websocketTokenStatus)
                 SettingRow(label = "OTA 状态", value = uiState.otaStatus)
                 SettingRow(label = "WebSocket", value = uiState.websocketStatus)
+                SettingRow(label = "Session ID", value = uiState.sessionId)
                 SettingRow(label = "最近 JSON", value = uiState.lastServerJson)
             }
 
             SettingsGroup(title = "后续阶段入口") {
-                SettingRow(label = "文本连通性", value = "Phase 3 接入 XiaozhiWebSocketClient")
-                SettingRow(label = "语音能力", value = "Phase 4/5 接入 AudioRecord、Opus、AudioTrack")
+                SettingRow(label = "文本连通性", value = "Phase 3 已接入 listen/detect/text")
+                SettingRow(label = "语音上行", value = "Phase 4 接入 AudioRecord 与 Opus 编码")
+                SettingRow(label = "语音下行", value = "Phase 5 接入 Opus 解码与 AudioTrack")
                 SettingRow(label = "MCP 工具", value = "Phase 8 接入 Android 本机 MCP")
             }
 

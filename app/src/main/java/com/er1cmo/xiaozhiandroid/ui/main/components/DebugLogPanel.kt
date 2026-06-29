@@ -73,6 +73,7 @@ fun DebugLogPanel(
             }
             DebugInfoLine(label = "OTA 状态", value = uiState.otaStatus)
             DebugInfoLine(label = "WebSocket", value = uiState.websocketStatus)
+            DebugInfoLine(label = "Session ID", value = uiState.sessionId)
             DebugInfoLine(label = "最近 JSON", value = uiState.lastServerJson)
 
             if (uiState.isDebugExpanded) {
@@ -80,7 +81,7 @@ fun DebugLogPanel(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(150.dp)
+                        .height(170.dp)
                         .background(
                             color = MaterialTheme.colorScheme.surface,
                             shape = RoundedCornerShape(12.dp),
