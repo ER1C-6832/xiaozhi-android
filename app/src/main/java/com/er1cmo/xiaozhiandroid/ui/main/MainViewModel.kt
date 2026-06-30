@@ -41,6 +41,8 @@ class MainViewModel(
     private var isWebSocketConnecting = false
     private var manualCloseRequested = false
     private var autoReconnectJob: Job? = null
+    private var voiceResponseWatchdogJob: Job? = null
+    private var voiceResponseGeneration = 0
     private var autoReconnectAttempts = 0
     private var pendingTextAfterReconnect: String? = null
     private var downlinkOpusFrames = 0
@@ -117,6 +119,7 @@ class MainViewModel(
             return
         }
         manualCloseRequested = false
+        cancelVoiceResponseWatchdog()
         autoReconnectJob?.cancel()
         autoReconnectJob = null
         appScope.launch {
@@ -130,6 +133,7 @@ class MainViewModel(
             return
         }
         manualCloseRequested = false
+        cancelVoiceResponseWatchdog()
         autoReconnectJob?.cancel()
         autoReconnectJob = null
         autoReconnectAttempts = 0
@@ -141,6 +145,7 @@ class MainViewModel(
 
     override fun close() {
         manualCloseRequested = true
+        cancelVoiceResponseWatchdog()
         autoReconnectJob?.cancel()
         autoReconnectJob = null
         pendingTextAfterReconnect = null
@@ -184,6 +189,8 @@ class MainViewModel(
             uiState = uiState.copy(audioUplinkStatus = "等待连接恢复后再录音")
             return
         }
+
+        cancelVoiceResponseWatchdog()
 
         if (audioEngine.isPlaybackActive() || uiState.conversationState == ConversationState.Speaking) {
             audioEngine.stopPlayback(
@@ -234,14 +241,20 @@ class MainViewModel(
         )
         if (shouldSendStop) {
             val sent = xiaozhiWebSocketClient.sendStopListening()
-            appendLocalLog(if (sent) "已发送 listen/stop" else "listen/stop 发送失败，准备重连")
-            if (!sent) scheduleAutoReconnect("listen/stop 发送失败")
+            if (sent) {
+                appendLocalLog("已发送 listen/stop，等待服务端 STT/TTS 响应")
+                if (wasRecording) scheduleVoiceResponseWatchdog()
+            } else {
+                appendLocalLog("listen/stop 发送失败，准备重连")
+                scheduleAutoReconnect("listen/stop 发送失败")
+            }
         } else if (!xiaozhiWebSocketClient.hasActiveSession()) {
             appendLocalLog("停止聆听：WebSocket 未连接或 session_id 缺失")
         }
     }
 
     override fun abort() {
+        cancelVoiceResponseWatchdog()
         val wasRecording = audioEngine.isRecording()
         if (wasRecording) {
             audioEngine.stopRecording()
@@ -356,6 +369,7 @@ class MainViewModel(
             )
             return true
         }
+        cancelVoiceResponseWatchdog()
         xiaozhiWebSocketClient.close("reconnect")
         uiState = uiState.copy(
             conversationState = ConversationState.Connecting,
@@ -516,6 +530,7 @@ class MainViewModel(
             appendLocalLog("旧 WebSocket 已关闭，正在重连")
             return
         }
+        cancelVoiceResponseWatchdog()
         audioEngine.stopRecording()
         audioEngine.stopPlayback(
             onLog = ::appendLocalLogFromAnyThread,
@@ -591,6 +606,7 @@ class MainViewModel(
         text: String,
         clearInput: Boolean,
     ) {
+        cancelVoiceResponseWatchdog()
         val sent = xiaozhiWebSocketClient.sendWakeText(text)
         if (!sent) {
             uiState = uiState.copy(
@@ -621,10 +637,17 @@ class MainViewModel(
 
         when (type) {
             "tts" -> handleTtsJson(state)
-            "stt", "llm" -> uiState = uiState.copy(conversationState = ConversationState.Thinking)
+            "stt" -> {
+                markVoiceResponseArrived("stt")
+                uiState = uiState.copy(conversationState = ConversationState.Thinking)
+            }
+            "llm" -> {
+                markVoiceResponseArrived("llm")
+                uiState = uiState.copy(conversationState = ConversationState.Thinking)
+            }
             "listen" -> uiState = uiState.copy(conversationState = ConversationState.Listening)
             else -> {
-                if (uiState.conversationState !in listOf(ConversationState.Speaking, ConversationState.Listening)) {
+                if (uiState.conversationState !in listOf(ConversationState.Speaking, ConversationState.Listening, ConversationState.Thinking)) {
                     uiState = uiState.copy(conversationState = ConversationState.Connected)
                 }
             }
@@ -637,6 +660,7 @@ class MainViewModel(
     }
 
     private fun handleTtsJson(state: String) {
+        markVoiceResponseArrived("tts/${state.ifBlank { "unknown" }}")
         when (state) {
             "start" -> {
                 downlinkOpusFrames = 0
@@ -663,6 +687,7 @@ class MainViewModel(
     }
 
     private fun handleIncomingAudioFrame(frame: ByteArray) {
+        markVoiceResponseArrived("audio")
         downlinkOpusFrames += 1
         downlinkBytes += frame.size
         audioEngine.queuePlaybackFrame(
@@ -677,6 +702,37 @@ class MainViewModel(
         if (downlinkOpusFrames == 1 || downlinkOpusFrames % DOWNLINK_LOG_INTERVAL_PACKETS == 0) {
             appendLocalLog("收到 TTS Opus 音频帧：${downlinkOpusFrames} 帧，累计 ${downlinkBytes}B")
         }
+    }
+
+    private fun scheduleVoiceResponseWatchdog() {
+        voiceResponseGeneration += 1
+        val generation = voiceResponseGeneration
+        voiceResponseWatchdogJob?.cancel()
+        voiceResponseWatchdogJob = appScope.launch {
+            delay(VOICE_RESPONSE_TIMEOUT_MS)
+            if (generation != voiceResponseGeneration) return@launch
+            if (uiState.conversationState != ConversationState.Thinking) return@launch
+            if (!xiaozhiWebSocketClient.hasActiveSession()) return@launch
+            uiState = uiState.copy(
+                conversationState = ConversationState.Connected,
+                audioUplinkStatus = "已停止，服务端未返回语音结果",
+                lastError = "语音响应等待超时，可重试或检查麦克风/模拟器音频输入",
+            )
+            appendLocalLog("语音响应等待超时：未收到 STT/TTS，已回到已连接。可重试，或在真机检查麦克风输入")
+        }
+    }
+
+    private fun markVoiceResponseArrived(reason: String) {
+        if (voiceResponseWatchdogJob?.isActive == true) {
+            appendLocalLog("已收到服务端语音响应：$reason")
+        }
+        cancelVoiceResponseWatchdog()
+    }
+
+    private fun cancelVoiceResponseWatchdog() {
+        voiceResponseGeneration += 1
+        voiceResponseWatchdogJob?.cancel()
+        voiceResponseWatchdogJob = null
     }
 
     private fun appendLocalLogFromAnyThread(message: String) {
@@ -741,5 +797,6 @@ class MainViewModel(
         const val AUTO_RECONNECT_DELAY_MS = 1_500L
         const val MAX_AUTO_RECONNECT_ATTEMPTS = 3
         const val REPEATED_LOG_REPORT_INTERVAL = 5
+        const val VOICE_RESPONSE_TIMEOUT_MS = 12_000L
     }
 }
