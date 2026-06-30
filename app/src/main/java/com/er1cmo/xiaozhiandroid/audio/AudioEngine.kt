@@ -3,6 +3,8 @@ package com.er1cmo.xiaozhiandroid.audio
 import android.Manifest
 import android.media.AudioRecord
 import androidx.annotation.RequiresPermission
+import kotlin.math.abs
+import kotlin.math.sqrt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -15,7 +17,14 @@ class AudioEngine(
     data class RecordingStats(
         val pcmFrames: Int = 0,
         val opusPackets: Int = 0,
-    )
+        val failedSends: Int = 0,
+        val peakAbs: Int = 0,
+        val rms: Int = 0,
+        val silentFrames: Int = 0,
+    ) {
+        val silentRatioPercent: Int
+            get() = if (pcmFrames <= 0) 0 else (silentFrames * 100 / pcmFrames)
+    }
 
     @Volatile
     private var recording = false
@@ -60,6 +69,28 @@ class AudioEngine(
             var encoder: OpusEncoder? = null
             var pcmFrames = 0
             var opusPackets = 0
+            var failedSends = 0
+            var peakAbs = 0
+            var silentFrames = 0
+            var squareSum = 0.0
+            var sampleCount = 0L
+
+            fun updateStats() {
+                val rms = if (sampleCount <= 0) {
+                    0
+                } else {
+                    sqrt(squareSum / sampleCount).toInt()
+                }
+                currentRecordingStats = RecordingStats(
+                    pcmFrames = pcmFrames,
+                    opusPackets = opusPackets,
+                    failedSends = failedSends,
+                    peakAbs = peakAbs,
+                    rms = rms,
+                    silentFrames = silentFrames,
+                )
+            }
+
             try {
                 if (!recording) {
                     onLog("音频上行启动已取消：尚未打开麦克风")
@@ -86,21 +117,32 @@ class AudioEngine(
                     val ok = recorder.readPcmFrame(audioRecord, buffer)
                     if (!ok || !recording) break
 
+                    val frameLevel = inspectPcm16(buffer)
+                    peakAbs = maxOf(peakAbs, frameLevel.peakAbs)
+                    squareSum += frameLevel.squareSum
+                    sampleCount += frameLevel.sampleCount
+                    if (frameLevel.peakAbs < SILENCE_PEAK_THRESHOLD) {
+                        silentFrames += 1
+                    }
+
                     val pcm = buffer.copyOf()
                     val presentationTimeUs = pcmFrames * AudioConstants.FRAME_DURATION_MS * 1_000L
                     pcmFrames += 1
-                    currentRecordingStats = RecordingStats(pcmFrames = pcmFrames, opusPackets = opusPackets)
+                    updateStats()
+
                     val packets = encoder.encode(PcmFrame(pcm, presentationTimeUs))
                     for (packet in packets) {
                         if (packet.isEmpty()) continue
                         val sent = onEncodedFrame(packet)
                         if (!sent) {
+                            failedSends += 1
+                            updateStats()
                             onLog("Opus 音频帧发送失败，停止录音上行")
                             recording = false
                             break
                         }
                         opusPackets += 1
-                        currentRecordingStats = RecordingStats(pcmFrames = pcmFrames, opusPackets = opusPackets)
+                        updateStats()
                     }
 
                     if (opusPackets > 0 && opusPackets % UPLINK_LOG_INTERVAL_PACKETS == 0) {
@@ -114,12 +156,16 @@ class AudioEngine(
             } finally {
                 recording = false
                 activeAudioRecord = null
-                currentRecordingStats = RecordingStats(pcmFrames = pcmFrames, opusPackets = opusPackets)
+                updateStats()
                 runCatching { audioRecord?.stop() }
                 runCatching { audioRecord?.release() }
                 runCatching { encoder?.release() }
-                onStatusChanged("已停止，累计发送 ${opusPackets} 帧")
-                onLog("音频上行停止：PCM ${pcmFrames} 帧，Opus ${opusPackets} 帧")
+                val stats = currentRecordingStats
+                onStatusChanged("已停止，累计发送 ${stats.opusPackets} 帧")
+                onLog(
+                    "音频上行停止：PCM ${stats.pcmFrames} 帧，Opus ${stats.opusPackets} 帧，" +
+                        "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
+                )
             }
         }
     }
@@ -318,6 +364,35 @@ class AudioEngine(
         return opusFrames >= PREBUFFER_TARGET_FRAMES || System.currentTimeMillis() >= deadlineAt
     }
 
+    private fun inspectPcm16(bytes: ByteArray): FrameLevel {
+        var peak = 0
+        var sum = 0.0
+        var samples = 0L
+        var i = 0
+        while (i + 1 < bytes.size) {
+            val lo = bytes[i].toInt() and 0xFF
+            val hi = bytes[i + 1].toInt()
+            var sample = (hi shl 8) or lo
+            if (sample > Short.MAX_VALUE) sample -= 0x10000
+            val absValue = abs(sample)
+            peak = maxOf(peak, absValue)
+            sum += sample.toDouble() * sample.toDouble()
+            samples += 1
+            i += 2
+        }
+        return FrameLevel(
+            peakAbs = peak,
+            squareSum = sum,
+            sampleCount = samples,
+        )
+    }
+
+    private data class FrameLevel(
+        val peakAbs: Int,
+        val squareSum: Double,
+        val sampleCount: Long,
+    )
+
     private companion object {
         const val UPLINK_LOG_INTERVAL_PACKETS = 50
         const val DOWNLINK_LOG_INTERVAL_PACKETS = 50
@@ -328,5 +403,6 @@ class AudioEngine(
         const val MAX_IDLE_POLLS_AFTER_PLAYBACK = 3
         const val PLAYBACK_DRAIN_GRACE_MS = 180L
         const val RECORDING_STOP_JOIN_TIMEOUT_MS = 1_500L
+        const val SILENCE_PEAK_THRESHOLD = 500
     }
 }

@@ -36,11 +36,15 @@ class XiaozhiWebSocketClient(
     var sessionId: String = ""
         private set
 
+    private val sendLock = Any()
+
     fun isConnected(): Boolean = connected && webSocket != null
 
     fun isConnecting(): Boolean = connecting
 
     fun hasActiveSession(): Boolean = isConnected() && sessionId.isNotBlank()
+
+    fun queuedBytes(): Long = webSocket?.queueSize() ?: 0L
 
     suspend fun connect(callbacks: Callbacks): Boolean {
         if (hasActiveSession()) {
@@ -69,7 +73,7 @@ class XiaozhiWebSocketClient(
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 postLog(callbacks, "WebSocket 已打开，发送 hello")
-                val sent = webSocket.send(XiaozhiMessage.hello())
+                val sent = sendRawText(webSocket, XiaozhiMessage.hello(), requireSession = false)
                 if (!sent && !helloReceived.isCompleted) {
                     helloReceived.complete(false)
                 }
@@ -185,17 +189,21 @@ class XiaozhiWebSocketClient(
     }
 
     fun sendAudioFrame(opusFrame: ByteArray): Boolean {
-        val socket = webSocket ?: return false
-        if (!hasActiveSession()) return false
-        return socket.send(opusFrame.toByteString())
+        return synchronized(sendLock) {
+            val socket = webSocket ?: return@synchronized false
+            if (!hasActiveSession()) return@synchronized false
+            socket.send(opusFrame.toByteString())
+        }
     }
 
     fun close(reason: String = "client_close") {
-        connected = false
-        connecting = false
-        sessionId = ""
-        webSocket?.close(NORMAL_CLOSE_CODE, reason.take(MAX_CLOSE_REASON_LENGTH))
-        webSocket = null
+        synchronized(sendLock) {
+            connected = false
+            connecting = false
+            sessionId = ""
+            webSocket?.close(NORMAL_CLOSE_CODE, reason.take(MAX_CLOSE_REASON_LENGTH))
+            webSocket = null
+        }
     }
 
     private fun closeSilently() {
@@ -210,8 +218,18 @@ class XiaozhiWebSocketClient(
     }
 
     private fun sendSessionPayload(message: String): Boolean {
-        val socket = webSocket ?: return false
-        if (!hasActiveSession()) return false
+        return synchronized(sendLock) {
+            val socket = webSocket ?: return@synchronized false
+            sendRawText(socket, message, requireSession = true)
+        }
+    }
+
+    private fun sendRawText(
+        socket: WebSocket,
+        message: String,
+        requireSession: Boolean,
+    ): Boolean {
+        if (requireSession && !hasActiveSession()) return false
         return socket.send(message)
     }
 

@@ -28,17 +28,35 @@ class AudioRecorder {
             .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
             .build()
 
-        val audioRecord = AudioRecord.Builder()
-            .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-            .setAudioFormat(audioFormat)
-            .setBufferSizeInBytes(bufferSize)
-            .build()
+        val candidates = listOf(
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+        )
+        val errors = mutableListOf<String>()
 
-        if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
+        for (source in candidates) {
+            val audioRecord = runCatching {
+                AudioRecord.Builder()
+                    .setAudioSource(source)
+                    .setAudioFormat(audioFormat)
+                    .setBufferSizeInBytes(bufferSize)
+                    .build()
+            }.getOrElse { exception ->
+                errors += "source=$source 创建失败：${exception.message ?: exception::class.java.simpleName}"
+                null
+            } ?: continue
+
+            if (audioRecord.state == AudioRecord.STATE_INITIALIZED) {
+                return audioRecord
+            }
+
             audioRecord.release()
-            throw IllegalStateException("AudioRecord 初始化失败")
+            errors += "source=$source 初始化失败"
         }
-        return audioRecord
+
+        throw IllegalStateException(
+            "AudioRecord 初始化失败：${errors.joinToString("；").ifBlank { "无可用 audio source" }}",
+        )
     }
 
     fun readPcmFrame(

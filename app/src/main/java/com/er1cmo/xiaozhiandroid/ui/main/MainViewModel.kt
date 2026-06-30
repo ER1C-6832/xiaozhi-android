@@ -44,6 +44,7 @@ class MainViewModel(
     private var autoReconnectJob: Job? = null
     private var voiceResponseWatchdogJob: Job? = null
     private var voiceResponseGeneration = 0
+    private var lastVoiceTurnTimedOut = false
     private var autoReconnectAttempts = 0
     private var pendingTextAfterReconnect: String? = null
     private var downlinkOpusFrames = 0
@@ -193,6 +194,18 @@ class MainViewModel(
 
         cancelVoiceResponseWatchdog()
 
+        if (lastVoiceTurnTimedOut || uiState.conversationState == ConversationState.Thinking) {
+            val resetSent = xiaozhiWebSocketClient.sendAbort()
+            lastVoiceTurnTimedOut = false
+            appendLocalLog(
+                if (resetSent) {
+                    "开始新一轮语音前已发送 abort，清理上一轮未完成的服务端监听状态"
+                } else {
+                    "开始新一轮语音前尝试清理服务端状态，但 abort 未发送成功"
+                },
+            )
+        }
+
         if (audioEngine.isPlaybackActive() || uiState.conversationState == ConversationState.Speaking) {
             audioEngine.stopPlayback(
                 onLog = ::appendLocalLogFromAnyThread,
@@ -253,6 +266,7 @@ class MainViewModel(
                     audioEngine.recordingStats()
                 }
                 val hasUsefulAudio = stats.opusPackets >= MIN_VALID_VOICE_OPUS_PACKETS
+                val maybeSilent = stats.pcmFrames > 0 && stats.peakAbs < MIN_SPEECH_PEAK_HINT
 
                 uiState = uiState.copy(
                     conversationState = when {
@@ -268,13 +282,18 @@ class MainViewModel(
                 )
 
                 if (shouldSendStop) {
+                    val queuedBeforeStop = waitForOutgoingAudioDrain()
                     val sent = xiaozhiWebSocketClient.sendStopListening()
                     if (sent) {
                         if (hasUsefulAudio) {
                             appendLocalLog(
                                 "已发送 listen/stop，等待服务端 STT/TTS 响应" +
-                                    "（本次 Opus ${stats.opusPackets} 帧，session=$stopSessionId）",
+                                    "（Opus ${stats.opusPackets} 帧，peak=${stats.peakAbs}, rms=${stats.rms}, " +
+                                    "静音 ${stats.silentRatioPercent}%, 发送队列 ${queuedBeforeStop}B, session=$stopSessionId）",
                             )
+                            if (maybeSilent) {
+                                appendLocalLog("本轮麦克风输入峰值较低，若仍无 STT，请重点检查模拟器/真机麦克风输入")
+                            }
                             scheduleVoiceResponseWatchdog()
                         } else {
                             uiState = uiState.copy(
@@ -282,8 +301,8 @@ class MainViewModel(
                                 lastError = "本次按住时间过短或未采集到有效语音帧",
                             )
                             appendLocalLog(
-                                "已发送 listen/stop，但本次没有有效 Opus 音频帧" +
-                                    "（PCM ${stats.pcmFrames}，Opus ${stats.opusPackets}），不等待服务端语音响应",
+                                "已发送 listen/stop，但本次有效 Opus 音频帧不足" +
+                                    "（PCM ${stats.pcmFrames}，Opus ${stats.opusPackets}, peak=${stats.peakAbs}, rms=${stats.rms}），不等待服务端语音响应",
                             )
                         }
                     } else {
@@ -759,16 +778,25 @@ class MainViewModel(
             if (generation != voiceResponseGeneration) return@launch
             if (uiState.conversationState != ConversationState.Thinking) return@launch
             if (!xiaozhiWebSocketClient.hasActiveSession()) return@launch
+            lastVoiceTurnTimedOut = true
+            val abortSent = xiaozhiWebSocketClient.sendAbort()
             uiState = uiState.copy(
                 conversationState = ConversationState.Connected,
                 audioUplinkStatus = "已停止，服务端未返回语音结果",
-                lastError = "语音响应等待超时，可重试或检查麦克风/模拟器音频输入",
+                lastError = "语音响应等待超时，已清理服务端监听状态，可重试",
             )
-            appendLocalLog("语音响应等待超时：未收到 STT/TTS，已回到已连接。可重试，或在真机检查麦克风输入")
+            appendLocalLog(
+                if (abortSent) {
+                    "语音响应等待超时：未收到 STT/TTS，已发送 abort 清理服务端状态并回到已连接"
+                } else {
+                    "语音响应等待超时：未收到 STT/TTS，已回到已连接；abort 未发送成功，请必要时重连"
+                },
+            )
         }
     }
 
     private fun markVoiceResponseArrived(reason: String) {
+        lastVoiceTurnTimedOut = false
         if (voiceResponseWatchdogJob?.isActive == true) {
             appendLocalLog("已收到服务端语音响应：$reason")
         }
@@ -779,6 +807,23 @@ class MainViewModel(
         voiceResponseGeneration += 1
         voiceResponseWatchdogJob?.cancel()
         voiceResponseWatchdogJob = null
+    }
+
+    private suspend fun waitForOutgoingAudioDrain(): Long {
+        val startedAt = System.currentTimeMillis()
+        var queued = xiaozhiWebSocketClient.queuedBytes()
+        if (queued <= OUTGOING_AUDIO_DRAIN_TARGET_BYTES) return queued
+
+        appendLocalLog("等待 WebSocket 音频发送队列排空：${queued}B")
+        while (System.currentTimeMillis() - startedAt < OUTGOING_AUDIO_DRAIN_TIMEOUT_MS) {
+            delay(OUTGOING_AUDIO_DRAIN_POLL_MS)
+            queued = xiaozhiWebSocketClient.queuedBytes()
+            if (queued <= OUTGOING_AUDIO_DRAIN_TARGET_BYTES) break
+        }
+        if (queued > OUTGOING_AUDIO_DRAIN_TARGET_BYTES) {
+            appendLocalLog("WebSocket 发送队列仍有 ${queued}B，继续发送 listen/stop")
+        }
+        return queued
     }
 
     private fun appendLocalLogFromAnyThread(message: String) {
@@ -845,5 +890,9 @@ class MainViewModel(
         const val REPEATED_LOG_REPORT_INTERVAL = 5
         const val VOICE_RESPONSE_TIMEOUT_MS = 12_000L
         const val MIN_VALID_VOICE_OPUS_PACKETS = 5
+        const val MIN_SPEECH_PEAK_HINT = 900
+        const val OUTGOING_AUDIO_DRAIN_TIMEOUT_MS = 300L
+        const val OUTGOING_AUDIO_DRAIN_POLL_MS = 25L
+        const val OUTGOING_AUDIO_DRAIN_TARGET_BYTES = 0L
     }
 }
