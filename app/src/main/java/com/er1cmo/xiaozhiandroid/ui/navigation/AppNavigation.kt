@@ -67,6 +67,11 @@ fun AppNavigation() {
                 viewModel.appendLocalLog("返回主界面")
                 currentScreen = AppScreen.Main
             },
+            onSaveSystemSettings = viewModel::saveSystemSettings,
+            onReactivate = viewModel::reactivate,
+            onResetNetwork = viewModel::resetNetworkConfig,
+            onResetIdentity = viewModel::resetDeviceIdentity,
+            onClearLogs = viewModel::clearDebugLogs,
         )
     }
 }

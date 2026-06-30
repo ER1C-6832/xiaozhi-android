@@ -28,17 +28,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -48,44 +44,52 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.er1cmo.xiaozhiandroid.data.config.AppConfig
-import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
-import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
-import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
 import com.er1cmo.xiaozhiandroid.domain.ConversationUiState
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     uiState: ConversationUiState,
     onBack: () -> Unit,
+    onSaveSystemSettings: (
+        otaUrl: String,
+        authorizationUrl: String,
+        websocketUrl: String,
+        websocketToken: String,
+        activationVersion: String,
+        developerModeEnabled: Boolean,
+    ) -> Unit,
+    onReactivate: () -> Unit,
+    onResetNetwork: () -> Unit,
+    onResetIdentity: () -> Unit,
+    onClearLogs: () -> Unit,
 ) {
-    val context = LocalContext.current.applicationContext
-    val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
-    val configRepository = remember { ConfigRepository(context) }
-    val deviceIdentityManager = remember { DeviceIdentityManager(configRepository) }
-    val otaActivationClient = remember { OtaActivationClient(configRepository) }
-    val config by configRepository.configFlow.collectAsState(initial = AppConfig())
 
-    var otaUrlDraft by rememberSaveable { mutableStateOf(AppConfig.DEFAULT_OTA_URL) }
-    var authorizationUrlDraft by rememberSaveable { mutableStateOf(AppConfig.DEFAULT_AUTHORIZATION_URL) }
-    var websocketUrlDraft by rememberSaveable { mutableStateOf("") }
-    var websocketTokenDraft by rememberSaveable { mutableStateOf("") }
-    var activationVersionDraft by rememberSaveable { mutableStateOf(AppConfig.DEFAULT_ACTIVATION_VERSION) }
-    var developerModeDraft by rememberSaveable { mutableStateOf(true) }
+    var otaUrlDraft by rememberSaveable { mutableStateOf(uiState.otaUrl) }
+    var authorizationUrlDraft by rememberSaveable { mutableStateOf(uiState.authorizationUrl) }
+    var websocketUrlDraft by rememberSaveable { mutableStateOf(uiState.rawWebsocketUrl) }
+    var websocketTokenDraft by rememberSaveable { mutableStateOf(uiState.rawWebsocketToken) }
+    var activationVersionDraft by rememberSaveable { mutableStateOf(uiState.activationVersion) }
+    var developerModeDraft by rememberSaveable { mutableStateOf(uiState.developerModeEnabled) }
     var showToken by rememberSaveable { mutableStateOf(false) }
     var localStatus by rememberSaveable { mutableStateOf("等待操作") }
     var pendingDialog by rememberSaveable { mutableStateOf<ConfirmAction?>(null) }
 
-    LaunchedEffect(config) {
-        otaUrlDraft = config.otaUrl
-        authorizationUrlDraft = config.authorizationUrl
-        websocketUrlDraft = config.websocketUrl
-        websocketTokenDraft = config.websocketToken
-        activationVersionDraft = config.activationVersion
-        developerModeDraft = config.developerModeEnabled
+    LaunchedEffect(
+        uiState.otaUrl,
+        uiState.authorizationUrl,
+        uiState.rawWebsocketUrl,
+        uiState.rawWebsocketToken,
+        uiState.activationVersion,
+        uiState.developerModeEnabled,
+    ) {
+        otaUrlDraft = uiState.otaUrl
+        authorizationUrlDraft = uiState.authorizationUrl
+        websocketUrlDraft = uiState.rawWebsocketUrl
+        websocketTokenDraft = uiState.rawWebsocketToken
+        activationVersionDraft = uiState.activationVersion
+        developerModeDraft = uiState.developerModeEnabled
     }
 
     pendingDialog?.let { action ->
@@ -99,33 +103,23 @@ fun SettingsScreen(
                         pendingDialog = null
                         when (action) {
                             ConfirmAction.ResetNetwork -> {
-                                coroutineScope.launch {
-                                    configRepository.resetNetworkConfigToDefaults()
-                                    localStatus = "网络配置已恢复默认，WebSocket/token/激活信息已清空"
-                                }
+                                localStatus = "正在重置网络配置"
+                                onResetNetwork()
                             }
 
                             ConfirmAction.ResetIdentity -> {
-                                coroutineScope.launch {
-                                    val identity = deviceIdentityManager.resetIdentity()
-                                    localStatus = "设备身份已重置：${identity.deviceId}，请重新 OTA / 激活"
-                                }
+                                localStatus = "正在重置设备身份"
+                                onResetIdentity()
                             }
 
                             ConfirmAction.Reactivate -> {
-                                coroutineScope.launch {
-                                    localStatus = "正在重新 OTA / 激活，请稍候"
-                                    configRepository.clearActivationAndWebSocket()
-                                    deviceIdentityManager.ensureIdentity()
-                                    try {
-                                        val outcome = otaActivationClient.runOtaAndActivation { message ->
-                                            coroutineScope.launch { localStatus = message }
-                                        }
-                                        localStatus = outcome.message
-                                    } catch (exception: Exception) {
-                                        localStatus = "重新 OTA / 激活失败：${exception.message ?: exception::class.java.simpleName}"
-                                    }
-                                }
+                                localStatus = "正在重新 OTA / 激活"
+                                onReactivate()
+                            }
+
+                            ConfirmAction.ClearLogs -> {
+                                localStatus = "调试日志已清空"
+                                onClearLogs()
                             }
                         }
                     },
@@ -172,7 +166,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                text = "Phase 7A：系统设置可编辑、敏感 token 隐藏显示、重置配置、重置设备身份、重新 OTA / 激活。",
+                text = "Phase 7B：设置动作统一接入主状态机，重置/重新激活会同步关闭连接并刷新主界面状态。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -209,7 +203,7 @@ fun SettingsScreen(
                     label = "Access Token",
                     value = websocketTokenDraft,
                     onValueChange = { websocketTokenDraft = it },
-                    placeholder = if (config.websocketToken.isBlank()) "未下发，可留空" else "已保存，可修改或清空",
+                    placeholder = if (uiState.rawWebsocketToken.isBlank()) "未下发，可留空" else "已保存，可修改或清空",
                     isSensitive = true,
                     sensitiveVisible = showToken,
                     onToggleSensitive = { showToken = !showToken },
@@ -228,7 +222,7 @@ fun SettingsScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text("开发者调试")
                         Text(
-                            text = "关闭后主界面可隐藏详细日志，后续包会继续完善过滤策略",
+                            text = "关闭后主界面会隐藏详细 ID、JSON 和日志，只保留简洁状态。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -241,17 +235,15 @@ fun SettingsScreen(
                 Button(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
-                        coroutineScope.launch {
-                            configRepository.updateSystemSettings(
-                                otaUrl = otaUrlDraft.trim(),
-                                authorizationUrl = authorizationUrlDraft.trim(),
-                                websocketUrl = websocketUrlDraft.trim(),
-                                websocketToken = websocketTokenDraft.trim(),
-                                activationVersion = activationVersionDraft.trim(),
-                                developerModeEnabled = developerModeDraft,
-                            )
-                            localStatus = "系统设置已保存"
-                        }
+                        onSaveSystemSettings(
+                            otaUrlDraft.trim(),
+                            authorizationUrlDraft.trim(),
+                            websocketUrlDraft.trim(),
+                            websocketTokenDraft.trim(),
+                            activationVersionDraft.trim(),
+                            developerModeDraft,
+                        )
+                        localStatus = "系统设置已保存"
                     },
                 ) {
                     Text("保存系统设置")
@@ -261,7 +253,7 @@ fun SettingsScreen(
             SettingsGroup(title = "重新激活与重置") {
                 SettingRow(label = "OTA 状态", value = uiState.otaStatus)
                 SettingRow(label = "WebSocket", value = uiState.websocketStatus)
-                SettingRow(label = "访问令牌", value = config.websocketTokenStatus)
+                SettingRow(label = "访问令牌", value = uiState.websocketTokenStatus)
                 SettingRow(label = "本页状态", value = localStatus)
                 OutlinedButton(
                     modifier = Modifier.fillMaxWidth(),
@@ -281,6 +273,11 @@ fun SettingsScreen(
                 ) {
                     Text("重置设备身份")
                 }
+                Text(
+                    text = "说明：重置网络配置会关闭当前 WebSocket 并清空 WebSocket URL、Access Token、激活缓存；重置设备身份会生成新的 client_id/device_id，需要重新绑定。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             SettingsGroup(title = "音频配置") {
@@ -301,7 +298,7 @@ fun SettingsScreen(
             }
 
             SettingsGroup(title = "调试工具") {
-                SettingRow(label = "日志状态", value = config.debugModeStatus)
+                SettingRow(label = "日志状态", value = uiState.debugModeStatus)
                 SettingRow(label = "最近错误", value = uiState.lastError)
                 SettingRow(label = "最近 JSON", value = uiState.lastServerJson)
                 OutlinedButton(
@@ -315,11 +312,12 @@ fun SettingsScreen(
                 ) {
                     Text("复制调试日志")
                 }
-                Text(
-                    text = "清空日志会在 Phase 7B 接入主 ViewModel；当前先提供复制能力，便于定位真机问题。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { pendingDialog = ConfirmAction.ClearLogs },
+                ) {
+                    Text("清空调试日志")
+                }
             }
 
             Button(
@@ -340,15 +338,19 @@ private enum class ConfirmAction(
 ) {
     Reactivate(
         title = "重新 OTA / 重新激活？",
-        message = "将清空当前 WebSocket URL、Access Token 和激活缓存，然后重新请求 OTA / 激活。",
+        message = "将关闭当前 WebSocket，清空 WebSocket URL、Access Token 和激活缓存，然后由主状态机重新请求 OTA / 激活。",
     ),
     ResetNetwork(
         title = "重置网络配置？",
-        message = "将 OTA URL、授权 URL、激活版本恢复默认，并清空 WebSocket URL、Access Token、激活状态和最近 JSON。",
+        message = "将关闭当前 WebSocket，恢复 OTA URL、授权 URL、激活版本默认值，并清空 WebSocket URL、Access Token、激活状态和最近 JSON。",
     ),
     ResetIdentity(
         title = "重置设备身份？",
-        message = "将生成新的客户端 ID、设备 ID、序列号和 HMAC 密钥，并清空激活与 WebSocket 配置。该操作需要重新激活。",
+        message = "将关闭当前 WebSocket，生成新的客户端 ID、设备 ID、序列号和 HMAC 密钥，并清空激活与 WebSocket 配置。该操作需要重新绑定设备。",
+    ),
+    ClearLogs(
+        title = "清空调试日志？",
+        message = "将清空主界面当前调试日志，不影响配置和连接。",
     ),
 }
 

@@ -101,6 +101,7 @@ fun MainScreen(
                 uiState = uiState,
                 onToggleExpanded = viewModel::toggleDebugPanel,
                 onConnectClick = viewModel::handleConnectionEntry,
+                onClearLogs = viewModel::clearDebugLogs,
             )
             Spacer(modifier = Modifier.padding(bottom = 8.dp))
         }

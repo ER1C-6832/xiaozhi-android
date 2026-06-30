@@ -12,7 +12,6 @@ import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
 import com.er1cmo.xiaozhiandroid.domain.ConversationController
 import com.er1cmo.xiaozhiandroid.domain.ConversationState
 import com.er1cmo.xiaozhiandroid.domain.ConversationUiState
-import com.er1cmo.xiaozhiandroid.network.NetworkState
 import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -84,7 +83,14 @@ class MainViewModel(
     }
 
     fun toggleDebugPanel() {
+        if (!uiState.developerModeEnabled) return
         uiState = uiState.copy(isDebugExpanded = !uiState.isDebugExpanded)
+    }
+
+    fun clearDebugLogs() {
+        lastLogMessage = ""
+        repeatedLogCount = 0
+        uiState = uiState.copy(debugLogs = listOf("${timestamp()} 调试日志已清空"))
     }
 
     fun requestMicrophonePermission() {
@@ -110,6 +116,107 @@ class MainViewModel(
     fun stopManualListening() = stopListening()
 
     fun abortConversation() = abort()
+
+    fun saveSystemSettings(
+        otaUrl: String,
+        authorizationUrl: String,
+        websocketUrl: String,
+        websocketToken: String,
+        activationVersion: String,
+        developerModeEnabled: Boolean,
+    ) {
+        appScope.launch {
+            configRepository.updateSystemSettings(
+                otaUrl = otaUrl.trim(),
+                authorizationUrl = authorizationUrl.trim(),
+                websocketUrl = websocketUrl.trim(),
+                websocketToken = websocketToken.trim(),
+                activationVersion = activationVersion.trim(),
+                developerModeEnabled = developerModeEnabled,
+            )
+            uiState = uiState.copy(
+                isDebugExpanded = if (developerModeEnabled) uiState.isDebugExpanded else false,
+                lastError = "暂无",
+            )
+            appendLocalLog("系统设置已保存")
+        }
+    }
+
+    fun resetNetworkConfig() {
+        if (isOtaActivationRunning || isWebSocketConnecting) {
+            appendLocalLog("请等待当前连接或激活流程结束后再重置网络配置")
+            return
+        }
+        appScope.launch {
+            resetRuntimeForSettingsAction(
+                action = "重置网络配置",
+                websocketStatus = "已重置，未连接",
+                autoReconnectStatus = "已暂停",
+            )
+            configRepository.resetNetworkConfigToDefaults()
+            uiState = uiState.copy(
+                conversationState = ConversationState.Idle,
+                otaStatus = "未请求",
+                websocketStatus = "未连接",
+                sessionId = "暂无",
+                lastServerJson = "暂无",
+                lastError = "暂无",
+            )
+            appendLocalLog("网络配置已恢复默认：已清空 WebSocket URL、Access Token、激活缓存和当前连接")
+        }
+    }
+
+    fun resetDeviceIdentity() {
+        if (isOtaActivationRunning || isWebSocketConnecting) {
+            appendLocalLog("请等待当前连接或激活流程结束后再重置设备身份")
+            return
+        }
+        appScope.launch {
+            resetRuntimeForSettingsAction(
+                action = "重置设备身份",
+                websocketStatus = "已重置，未连接",
+                autoReconnectStatus = "已暂停",
+            )
+            val identity = deviceIdentityManager.resetIdentity()
+            uiState = uiState.copy(
+                conversationState = ConversationState.Idle,
+                otaStatus = "未请求",
+                websocketStatus = "未连接",
+                sessionId = "暂无",
+                lastServerJson = "暂无",
+                lastError = "需要重新 OTA / 激活",
+            )
+            appendLocalLog("设备身份已重置：${identity.deviceId}，请重新 OTA / 激活并在小智官网重新绑定")
+        }
+    }
+
+    fun reactivate() {
+        if (isOtaActivationRunning || isWebSocketConnecting) {
+            appendLocalLog("重新 OTA / 激活流程正在运行，请稍候")
+            return
+        }
+        appScope.launch {
+            resetRuntimeForSettingsAction(
+                action = "重新 OTA / 激活",
+                websocketStatus = "重新激活中",
+                autoReconnectStatus = "已暂停",
+            )
+            configRepository.clearActivationAndWebSocket()
+            deviceIdentityManager.ensureIdentity()
+            manualCloseRequested = false
+            val otaOk = runOtaActivationInternal()
+            if (otaOk) {
+                appendLocalLog("重新 OTA / 激活完成，开始连接 WebSocket")
+                connectWebSocketInternal(allowAutoReconnect = true)
+            } else {
+                uiState = uiState.copy(
+                    conversationState = ConversationState.Error,
+                    websocketStatus = "等待手动处理",
+                    lastError = "重新 OTA / 激活未完成，请检查验证码或网络",
+                )
+            }
+        }
+    }
 
     override fun connect() {
         if (isOtaActivationRunning || isWebSocketConnecting) {
@@ -558,6 +665,11 @@ class MainViewModel(
                     sessionId = sessionId.ifBlank { "暂无" },
                     lastError = "暂无",
                 )
+                appScope.launch {
+                    configRepository.setActivationStatus(true)
+                    configRepository.clearActivationData()
+                    appendLocalLog("WebSocket hello 成功，已同步激活状态")
+                }
                 flushPendingTextAfterReconnect()
             },
             onIncomingJson = { prettyJson, type ->
@@ -826,6 +938,33 @@ class MainViewModel(
         return queued
     }
 
+    private fun resetRuntimeForSettingsAction(
+        action: String,
+        websocketStatus: String,
+        autoReconnectStatus: String,
+    ) {
+        manualCloseRequested = true
+        cancelVoiceResponseWatchdog()
+        autoReconnectJob?.cancel()
+        autoReconnectJob = null
+        autoReconnectAttempts = 0
+        pendingTextAfterReconnect = null
+        audioEngine.stopRecording()
+        audioEngine.stopPlayback(
+            onLog = ::appendLocalLogFromAnyThread,
+            onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+        )
+        xiaozhiWebSocketClient.close("settings_reconnect")
+        uiState = uiState.copy(
+            conversationState = ConversationState.Idle,
+            websocketStatus = websocketStatus,
+            autoReconnectStatus = autoReconnectStatus,
+            sessionId = "暂无",
+            audioUplinkStatus = if (audioEngine.isRecording()) "停止中" else uiState.audioUplinkStatus,
+        )
+        appendLocalLog("$action：已关闭当前 WebSocket、停止录音/播放并清理运行时 session")
+    }
+
     private fun appendLocalLogFromAnyThread(message: String) {
         appScope.launch(Dispatchers.Main.immediate) {
             appendLocalLog(message)
@@ -847,6 +986,9 @@ class MainViewModel(
     private fun applyConfig(config: AppConfig) {
         val hasWebSocketUrl = config.websocketUrl.isNotBlank()
         uiState = uiState.copy(
+            developerModeEnabled = config.developerModeEnabled,
+            isDebugExpanded = if (config.developerModeEnabled) uiState.isDebugExpanded else false,
+            debugModeStatus = config.debugModeStatus,
             clientId = config.clientId.ifBlank { "未生成" },
             deviceId = config.deviceId.ifBlank { "未生成" },
             serialNumber = config.serialNumber.ifBlank { "未生成" },
@@ -861,6 +1003,8 @@ class MainViewModel(
             otaUrl = config.otaUrl,
             authorizationUrl = config.authorizationUrl,
             websocketUrl = config.websocketUrlDisplay,
+            rawWebsocketUrl = config.websocketUrl,
+            rawWebsocketToken = config.websocketToken,
             websocketTokenStatus = config.websocketTokenStatus,
             activationVersion = config.activationVersion,
             websocketStatus = when {

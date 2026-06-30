@@ -32,6 +32,7 @@ fun DebugLogPanel(
     uiState: ConversationUiState,
     onToggleExpanded: () -> Unit,
     onConnectClick: () -> Unit,
+    onClearLogs: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val connectButtonText = when (uiState.conversationState) {
@@ -70,10 +71,12 @@ fun DebugLogPanel(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Row {
-                    OutlinedButton(onClick = onToggleExpanded) {
-                        Text(if (uiState.isDebugExpanded) "收起" else "展开")
+                    if (uiState.developerModeEnabled) {
+                        OutlinedButton(onClick = onToggleExpanded) {
+                            Text(if (uiState.isDebugExpanded) "收起" else "展开")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         enabled = connectEnabled,
                         onClick = onConnectClick,
@@ -85,25 +88,43 @@ fun DebugLogPanel(
 
             Spacer(modifier = Modifier.height(10.dp))
             DebugInfoLine(label = "状态机", value = uiState.statusLabel)
-            DebugInfoLine(label = "设备 ID", value = uiState.deviceId)
-            DebugInfoLine(label = "Client ID", value = uiState.clientId)
-            DebugInfoLine(label = "激活状态", value = uiState.activationStatus)
-            if (uiState.activationCode != "暂无") {
-                DebugInfoLine(label = "激活码", value = uiState.activationCode)
-            }
-            DebugInfoLine(label = "OTA 状态", value = uiState.otaStatus)
             DebugInfoLine(label = "WebSocket", value = uiState.websocketStatus)
-            DebugInfoLine(label = "自动重连", value = uiState.autoReconnectStatus)
             DebugInfoLine(label = "Session ID", value = uiState.sessionId)
             DebugInfoLine(label = "音频上行", value = uiState.audioUplinkStatus)
             DebugInfoLine(label = "TTS 播放", value = uiState.audioPlaybackStatus)
-            if (uiState.lastError != "暂无") {
-                DebugInfoLine(label = "最近错误", value = uiState.lastError)
-            }
-            DebugInfoLine(label = "最近 JSON", value = uiState.lastServerJson)
 
-            if (uiState.isDebugExpanded) {
+            if (uiState.developerModeEnabled) {
+                DebugInfoLine(label = "设备 ID", value = uiState.deviceId)
+                DebugInfoLine(label = "Client ID", value = uiState.clientId)
+                DebugInfoLine(label = "激活状态", value = uiState.activationStatus)
+                if (uiState.activationCode != "暂无") {
+                    DebugInfoLine(label = "激活码", value = uiState.activationCode)
+                }
+                DebugInfoLine(label = "OTA 状态", value = uiState.otaStatus)
+                DebugInfoLine(label = "自动重连", value = uiState.autoReconnectStatus)
+                if (uiState.lastError != "暂无") {
+                    DebugInfoLine(label = "最近错误", value = uiState.lastError)
+                }
+                DebugInfoLine(label = "最近 JSON", value = uiState.lastServerJson)
+            } else {
+                Text(
+                    text = "开发者调试已关闭：详细 ID、JSON 与日志已隐藏，可在参数设置中重新开启。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (uiState.developerModeEnabled && uiState.isDebugExpanded) {
                 Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    OutlinedButton(onClick = onClearLogs) {
+                        Text("清空日志")
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
