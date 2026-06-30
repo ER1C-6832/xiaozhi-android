@@ -1,8 +1,5 @@
 package com.er1cmo.xiaozhiandroid.ui.main
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import com.er1cmo.xiaozhiandroid.data.config.AppConfig
 import com.er1cmo.xiaozhiandroid.data.ota.ActivationState
 import com.er1cmo.xiaozhiandroid.domain.ConversationController
@@ -28,10 +25,13 @@ class MainViewModel(
     private val xiaozhiWebSocketClient = appController.protocolClient
     private val audioEngine = appController.audioEngine
     private val appScope = appController.appScope
-    private val stateMachine = appController.conversationStateMachine
+    private val stateStore = appController.stateStore
 
-    var uiState by mutableStateOf(ConversationUiState())
-        private set
+    var uiState: ConversationUiState
+        get() = stateStore.uiState
+        private set(value) {
+            stateStore.replace(value)
+        }
 
     private var hasStartedConfigCollection = false
     private var isOtaActivationRunning = false
@@ -59,7 +59,7 @@ class MainViewModel(
             appendLocalLog("设备身份已准备：${identity.deviceId}")
         } catch (exception: Exception) {
             uiState = uiState.copy(
-                conversationState = ConversationState.Error,
+                conversationState = transitionTo(ConversationState.Error, "ui_error"),
                 lastError = exception.message ?: exception::class.java.simpleName,
             )
             appendLocalLog("设备身份初始化失败：${exception.message ?: exception::class.java.simpleName}")
@@ -153,7 +153,7 @@ class MainViewModel(
             )
             configRepository.resetNetworkConfigToDefaults()
             uiState = uiState.copy(
-                conversationState = ConversationState.Idle,
+                conversationState = transitionTo(ConversationState.Idle, "ui_idle"),
                 otaStatus = "未请求",
                 websocketStatus = "未连接",
                 sessionId = "暂无",
@@ -177,7 +177,7 @@ class MainViewModel(
             )
             val identity = deviceIdentityManager.resetIdentity()
             uiState = uiState.copy(
-                conversationState = ConversationState.Idle,
+                conversationState = transitionTo(ConversationState.Idle, "ui_idle"),
                 otaStatus = "未请求",
                 websocketStatus = "未连接",
                 sessionId = "暂无",
@@ -208,7 +208,7 @@ class MainViewModel(
                 connectWebSocketInternal(allowAutoReconnect = true)
             } else {
                 uiState = uiState.copy(
-                    conversationState = ConversationState.Error,
+                    conversationState = transitionTo(ConversationState.Error, "ui_error"),
                     websocketStatus = "等待手动处理",
                     lastError = "重新 OTA / 激活未完成，请检查验证码或网络",
                 )
@@ -262,7 +262,7 @@ class MainViewModel(
             onAudioStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
         )
         uiState = uiState.copy(
-            conversationState = ConversationState.Idle,
+            conversationState = transitionTo(ConversationState.Idle, "ui_idle"),
             websocketStatus = "已手动关闭",
             autoReconnectStatus = "已暂停",
             sessionId = "暂无",
@@ -322,7 +322,7 @@ class MainViewModel(
         val startSent = xiaozhiWebSocketClient.sendStartManualListening()
         if (!startSent) {
             uiState = uiState.copy(
-                conversationState = ConversationState.Error,
+                conversationState = transitionTo(ConversationState.Error, "ui_error"),
                 audioUplinkStatus = "listen/start 发送失败",
                 lastError = "listen/start/manual 发送失败",
             )
@@ -332,7 +332,7 @@ class MainViewModel(
         }
 
         uiState = uiState.copy(
-            conversationState = stateMachine.onListening(),
+            conversationState = transitionTo(ConversationState.Listening, "manual_listen_start"),
             audioUplinkStatus = "正在启动录音",
         )
         appendLocalLog("已发送 listen/start/manual，开始麦克风录音与 Opus 上行")
@@ -372,12 +372,13 @@ class MainViewModel(
                 val hasUsefulAudio = stats.opusPackets >= MIN_VALID_VOICE_OPUS_PACKETS
                 val maybeSilent = stats.pcmFrames > 0 && stats.peakAbs < MIN_SPEECH_PEAK_HINT
 
+                val stopState = when {
+                    xiaozhiWebSocketClient.hasActiveSession() && hasUsefulAudio -> transitionTo(ConversationState.Thinking, "voice_stop_useful_audio")
+                    xiaozhiWebSocketClient.hasActiveSession() -> transitionTo(ConversationState.Connected, "voice_stop_no_useful_audio")
+                    else -> transitionTo(ConversationState.Idle, "voice_stop_disconnected")
+                }
                 uiState = uiState.copy(
-                    conversationState = when {
-                        xiaozhiWebSocketClient.hasActiveSession() && hasUsefulAudio -> ConversationState.Thinking
-                        xiaozhiWebSocketClient.hasActiveSession() -> ConversationState.Connected
-                        else -> ConversationState.Idle
-                    },
+                    conversationState = stopState,
                     audioUplinkStatus = if (wasRecording) {
                         "已停止，PCM ${stats.pcmFrames} 帧，Opus ${stats.opusPackets} 帧"
                     } else {
@@ -401,7 +402,7 @@ class MainViewModel(
                             scheduleVoiceResponseWatchdog()
                         } else {
                             uiState = uiState.copy(
-                                conversationState = if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle,
+                                conversationState = transitionTo(if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle, "voice_no_useful_audio"),
                                 lastError = "本次按住时间过短或未采集到有效语音帧",
                             )
                             appendLocalLog(
@@ -439,7 +440,7 @@ class MainViewModel(
             false
         }
         uiState = uiState.copy(
-            conversationState = if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle,
+            conversationState = transitionTo(if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle, "abort"),
             audioUplinkStatus = if (wasRecording) "已停止" else uiState.audioUplinkStatus,
         )
         appendLocalLog(if (sent) "已发送 abort/user_interruption" else "打断对话：本地已停止，WebSocket 未连接或 session_id 缺失")
@@ -479,7 +480,7 @@ class MainViewModel(
 
         pendingTextAfterReconnect = pendingText
         uiState = uiState.copy(
-            conversationState = ConversationState.Connecting,
+            conversationState = transitionTo(ConversationState.Connecting, "ui_connecting"),
             websocketStatus = "自动重连中",
             autoReconnectStatus = "$action 触发重连",
         )
@@ -498,7 +499,7 @@ class MainViewModel(
         allowAutoReconnect: Boolean,
     ): Boolean {
         uiState = uiState.copy(
-            conversationState = ConversationState.Connecting,
+            conversationState = transitionTo(ConversationState.Connecting, "ui_connecting"),
             websocketStatus = "准备连接",
         )
         return try {
@@ -516,7 +517,7 @@ class MainViewModel(
         } catch (exception: Exception) {
             val error = exception.message ?: exception::class.java.simpleName
             uiState = uiState.copy(
-                conversationState = ConversationState.Error,
+                conversationState = transitionTo(ConversationState.Error, "ui_error"),
                 websocketStatus = "连接失败",
                 lastError = error,
             )
@@ -532,7 +533,7 @@ class MainViewModel(
     ): Boolean {
         if (xiaozhiWebSocketClient.hasActiveSession()) {
             uiState = uiState.copy(
-                conversationState = ConversationState.Connected,
+                conversationState = transitionTo(ConversationState.Connected, "ui_connected"),
                 websocketStatus = "已连接",
                 autoReconnectStatus = "无需重连",
             )
@@ -541,7 +542,7 @@ class MainViewModel(
         cancelVoiceResponseWatchdog()
         xiaozhiWebSocketClient.close("reconnect")
         uiState = uiState.copy(
-            conversationState = ConversationState.Connecting,
+            conversationState = transitionTo(ConversationState.Connecting, "ui_connecting"),
             websocketStatus = "重连中",
             sessionId = "暂无",
         )
@@ -557,7 +558,7 @@ class MainViewModel(
 
         isOtaActivationRunning = true
         uiState = uiState.copy(
-            conversationState = ConversationState.Activating,
+            conversationState = transitionTo(ConversationState.Activating, "ui_activating"),
             otaStatus = ActivationState.OtaRequesting.label,
             websocketStatus = "等待 OTA 下发 WebSocket 配置",
         )
@@ -568,13 +569,17 @@ class MainViewModel(
                 appendLocalLogFromAnyThread(message)
             }
             val hasWebSocketConfig = configRepository.getConfig().websocketUrl.isNotBlank()
+            val otaConversationState = when (outcome.state) {
+                ActivationState.Activated,
+                ActivationState.OtaSuccess -> transitionTo(
+                    if (hasWebSocketConfig) ConversationState.Connecting else ConversationState.Connected,
+                    "ota_success",
+                )
+                ActivationState.Failed -> transitionTo(ConversationState.Error, "ota_failed")
+                else -> transitionTo(ConversationState.Activating, "ota_running")
+            }
             uiState = uiState.copy(
-                conversationState = when (outcome.state) {
-                    ActivationState.Activated,
-                    ActivationState.OtaSuccess -> if (hasWebSocketConfig) ConversationState.Connecting else ConversationState.Connected
-                    ActivationState.Failed -> ConversationState.Error
-                    else -> ConversationState.Activating
-                },
+                conversationState = otaConversationState,
                 otaStatus = outcome.state.label,
                 websocketStatus = if (hasWebSocketConfig) {
                     "已获取配置，待连接"
@@ -588,7 +593,7 @@ class MainViewModel(
         } catch (exception: Exception) {
             val error = exception.message ?: exception::class.java.simpleName
             uiState = uiState.copy(
-                conversationState = ConversationState.Error,
+                conversationState = transitionTo(ConversationState.Error, "ui_error"),
                 otaStatus = "失败",
                 websocketStatus = "未连接",
                 lastError = error,
@@ -603,7 +608,7 @@ class MainViewModel(
     private suspend fun connectWebSocketInternal(allowAutoReconnect: Boolean): Boolean {
         if (xiaozhiWebSocketClient.hasActiveSession()) {
             uiState = uiState.copy(
-                conversationState = ConversationState.Connected,
+                conversationState = transitionTo(ConversationState.Connected, "ui_connected"),
                 websocketStatus = "已连接",
                 autoReconnectStatus = "未触发",
             )
@@ -617,7 +622,7 @@ class MainViewModel(
 
         isWebSocketConnecting = true
         uiState = uiState.copy(
-            conversationState = ConversationState.Connecting,
+            conversationState = transitionTo(ConversationState.Connecting, "ui_connecting"),
             websocketStatus = "WebSocket 连接中",
         )
 
@@ -631,7 +636,7 @@ class MainViewModel(
         } catch (exception: Exception) {
             val error = exception.message ?: exception::class.java.simpleName
             uiState = uiState.copy(
-                conversationState = ConversationState.Error,
+                conversationState = transitionTo(ConversationState.Error, "ui_error"),
                 websocketStatus = "连接失败",
                 lastError = error,
             )
@@ -646,7 +651,7 @@ class MainViewModel(
             uiState = uiState.copy(autoReconnectStatus = "已连接")
         } else {
             uiState = uiState.copy(
-                conversationState = ConversationState.Error,
+                conversationState = transitionTo(ConversationState.Error, "ui_error"),
                 websocketStatus = "连接失败",
             )
             if (allowAutoReconnect) scheduleAutoReconnect("WebSocket 连接失败")
@@ -678,9 +683,9 @@ class MainViewModel(
     }
 
     private fun handleProtocolConnected(sessionId: String) {
-        stateMachine.onConnected()
+        transitionTo(ConversationState.Connected, "protocol_connected")
         uiState = uiState.copy(
-            conversationState = ConversationState.Connected,
+            conversationState = transitionTo(ConversationState.Connected, "ui_connected"),
             websocketStatus = "已连接",
             autoReconnectStatus = "已连接",
             sessionId = sessionId.ifBlank { "暂无" },
@@ -710,7 +715,7 @@ class MainViewModel(
             onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
         )
         uiState = uiState.copy(
-            conversationState = if (asError) ConversationState.Error else ConversationState.Idle,
+            conversationState = transitionTo(if (asError) ConversationState.Error else ConversationState.Idle, "socket_lost"),
             websocketStatus = if (asError) "错误" else "已断开",
             sessionId = "暂无",
             audioUplinkStatus = if (audioEngine.isRecording()) "停止中" else uiState.audioUplinkStatus,
@@ -783,7 +788,7 @@ class MainViewModel(
         val sent = xiaozhiWebSocketClient.sendWakeText(text)
         if (!sent) {
             uiState = uiState.copy(
-                conversationState = ConversationState.Error,
+                conversationState = transitionTo(ConversationState.Error, "ui_error"),
                 lastError = "发送 listen/detect/text 失败",
             )
             pendingTextAfterReconnect = text
@@ -794,7 +799,7 @@ class MainViewModel(
 
         uiState = uiState.copy(
             textInput = if (clearInput) "" else uiState.textInput,
-            conversationState = stateMachine.onThinking(),
+            conversationState = transitionTo(ConversationState.Thinking, "text_sent"),
             lastServerJson = "等待服务端 JSON 响应",
         )
         appendLocalLog("已发送 listen/detect/text：$text")
@@ -810,16 +815,16 @@ class MainViewModel(
             "tts" -> handleTtsJson(state)
             "stt" -> {
                 markVoiceResponseArrived("stt")
-                uiState = uiState.copy(conversationState = ConversationState.Thinking)
+                uiState = uiState.copy(conversationState = transitionTo(ConversationState.Thinking, "ui_thinking"))
             }
             "llm" -> {
                 markVoiceResponseArrived("llm")
-                uiState = uiState.copy(conversationState = ConversationState.Thinking)
+                uiState = uiState.copy(conversationState = transitionTo(ConversationState.Thinking, "ui_thinking"))
             }
-            "listen" -> uiState = uiState.copy(conversationState = ConversationState.Listening)
+            "listen" -> uiState = uiState.copy(conversationState = transitionTo(ConversationState.Listening, "ui_listening"))
             else -> {
                 if (uiState.conversationState !in listOf(ConversationState.Speaking, ConversationState.Listening, ConversationState.Thinking)) {
-                    uiState = uiState.copy(conversationState = ConversationState.Connected)
+                    uiState = uiState.copy(conversationState = transitionTo(ConversationState.Connected, "ui_connected"))
                 }
             }
         }
@@ -840,7 +845,7 @@ class MainViewModel(
                     onLog = ::appendLocalLogFromAnyThread,
                     onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
                 )
-                uiState = uiState.copy(conversationState = ConversationState.Speaking)
+                uiState = uiState.copy(conversationState = transitionTo(ConversationState.Speaking, "ui_speaking"))
             }
             "stop" -> {
                 audioEngine.markTtsStop(
@@ -848,11 +853,11 @@ class MainViewModel(
                     onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
                 )
                 uiState = uiState.copy(
-                    conversationState = if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle,
+                    conversationState = transitionTo(if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle, "tts_stop"),
                 )
             }
             else -> {
-                uiState = uiState.copy(conversationState = ConversationState.Speaking)
+                uiState = uiState.copy(conversationState = transitionTo(ConversationState.Speaking, "ui_speaking"))
             }
         }
     }
@@ -867,7 +872,7 @@ class MainViewModel(
             onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
         )
         uiState = uiState.copy(
-            conversationState = stateMachine.onSpeaking(),
+            conversationState = transitionTo(ConversationState.Speaking, "incoming_audio"),
             audioPlaybackStatus = "播放中，收到 ${downlinkOpusFrames} 帧",
         )
         if (downlinkOpusFrames == 1 || downlinkOpusFrames % DOWNLINK_LOG_INTERVAL_PACKETS == 0) {
@@ -887,7 +892,7 @@ class MainViewModel(
             lastVoiceTurnTimedOut = true
             val abortSent = xiaozhiWebSocketClient.sendAbort()
             uiState = uiState.copy(
-                conversationState = stateMachine.onConnected(),
+                conversationState = transitionTo(ConversationState.Connected, "voice_timeout"),
                 audioUplinkStatus = "已停止，服务端未返回语音结果",
                 lastError = "语音响应等待超时，已清理服务端监听状态，可重试",
             )
@@ -949,7 +954,7 @@ class MainViewModel(
             onAudioStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
         )
         uiState = uiState.copy(
-            conversationState = ConversationState.Idle,
+            conversationState = transitionTo(ConversationState.Idle, "ui_idle"),
             websocketStatus = websocketStatus,
             autoReconnectStatus = autoReconnectStatus,
             sessionId = "暂无",
@@ -1008,6 +1013,14 @@ class MainViewModel(
             },
             lastServerJson = config.lastJson.ifBlank { uiState.lastServerJson },
         )
+    }
+
+
+    private fun transitionTo(
+        next: ConversationState,
+        reason: String,
+    ): ConversationState {
+        return appController.transitionConversationState(next, reason)
     }
 
     private fun timestamp(): String {

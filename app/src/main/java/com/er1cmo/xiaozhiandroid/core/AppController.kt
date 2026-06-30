@@ -5,6 +5,7 @@ import com.er1cmo.xiaozhiandroid.audio.AudioEngine
 import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
 import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
 import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
+import com.er1cmo.xiaozhiandroid.domain.ConversationState
 import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
 import com.er1cmo.xiaozhiandroid.conversation.ConversationSession
 import com.er1cmo.xiaozhiandroid.conversation.ConversationStateMachine
@@ -19,9 +20,9 @@ import kotlinx.coroutines.CoroutineScope
  *
  * Phase 8A-1 moved object construction and lifecycle ownership out of
  * AppNavigation. Phase 8A-2 started moving runtime ownership into this controller.
- * Phase 8A-3 moves WebSocket callback adaptation and protocol message routing
- * here as well: the UI presenter now receives ProtocolEvent values instead of
- * raw WebSocket callbacks.
+ * Phase 8A-3 moved WebSocket callback adaptation and protocol message routing
+ * here as well. Phase 8A-4 moves conversation state transitions into this
+ * controller and AppStateStore so MainViewModel is closer to a thin presenter.
  */
 class AppController private constructor(
     val appContext: Context,
@@ -63,12 +64,47 @@ class AppController private constructor(
         )
     }
 
+
+    fun transitionConversationState(
+        next: ConversationState,
+        reason: String,
+    ): ConversationState {
+        val from = conversationStateMachine.currentState
+        val resolved = conversationStateMachine.transitionTo(next, reason)
+        stateStore.update { state -> state.copy(conversationState = resolved) }
+        if (from != resolved) {
+            eventBus.publish(
+                AppEvent.ConversationStateChanged(
+                    from = from,
+                    to = resolved,
+                    reason = reason,
+                ),
+            )
+        }
+        return resolved
+    }
+
+    fun resetConversationState(reason: String): ConversationState {
+        return transitionConversationState(ConversationState.Idle, reason)
+    }
+
     fun publishProtocolEvent(event: ProtocolEvent) {
         when (event) {
             is ProtocolEvent.Log -> eventBus.publish(AppEvent.Log(event.message))
-            is ProtocolEvent.Connected -> eventBus.publish(AppEvent.ProtocolConnected(event.sessionId))
-            is ProtocolEvent.Closed -> eventBus.publish(AppEvent.ProtocolDisconnected(event.reason))
-            is ProtocolEvent.Error -> eventBus.publish(AppEvent.Error(event.message))
+            is ProtocolEvent.Connected -> {
+                transitionConversationState(ConversationState.Connected, "protocol_connected")
+                eventBus.publish(AppEvent.ProtocolConnected(event.sessionId))
+            }
+            is ProtocolEvent.Closed -> {
+                if (!event.reason.contains("reconnect", ignoreCase = true)) {
+                    transitionConversationState(ConversationState.Idle, "protocol_closed")
+                }
+                eventBus.publish(AppEvent.ProtocolDisconnected(event.reason))
+            }
+            is ProtocolEvent.Error -> {
+                transitionConversationState(ConversationState.Error, "protocol_error")
+                eventBus.publish(AppEvent.Error(event.message))
+            }
             is ProtocolEvent.NetworkStateChanged -> Unit
             is ProtocolEvent.JsonMessage -> eventBus.publish(
                 AppEvent.IncomingJson(
@@ -99,6 +135,7 @@ class AppController private constructor(
             onStatusChanged = onAudioStatusChanged,
         )
         xiaozhiWebSocketClient.close(reason)
+        resetConversationState("close_runtime:$reason")
         eventBus.publish(AppEvent.ProtocolDisconnected(reason))
     }
 

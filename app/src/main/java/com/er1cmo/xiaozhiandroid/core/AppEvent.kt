@@ -1,12 +1,13 @@
 package com.er1cmo.xiaozhiandroid.core
 
+import com.er1cmo.xiaozhiandroid.domain.ConversationState
+
 /**
  * Lightweight app-wide event model.
  *
- * Phase 8A introduces this event surface so future modules such as MCP,
- * CameraX, wake word, notification controls and UI cards do not need to call
- * MainViewModel directly. Only a small subset is emitted in 8A-1; later 8A
- * steps will move protocol/audio/conversation callbacks onto this bus.
+ * Phase 8A-4 makes conversation state changes first-class events so future
+ * modules such as MCP, CameraX, wake word and notification controls can observe
+ * state transitions without coupling themselves to MainViewModel.
  */
 sealed interface AppEvent {
     data object AppStarted : AppEvent
@@ -16,6 +17,12 @@ sealed interface AppEvent {
     data class ModuleStarted(val moduleName: String) : AppEvent
     data class ModuleStopped(val moduleName: String) : AppEvent
     data class ModuleFailed(val moduleName: String, val message: String) : AppEvent
+
+    data class ConversationStateChanged(
+        val from: ConversationState,
+        val to: ConversationState,
+        val reason: String,
+    ) : AppEvent
 
     data class ProtocolConnected(val sessionId: String) : AppEvent
     data class ProtocolDisconnected(val reason: String) : AppEvent
