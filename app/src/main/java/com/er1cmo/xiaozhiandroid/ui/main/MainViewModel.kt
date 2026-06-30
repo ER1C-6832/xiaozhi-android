@@ -3,20 +3,17 @@ package com.er1cmo.xiaozhiandroid.ui.main
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.er1cmo.xiaozhiandroid.audio.AudioEngine
 import com.er1cmo.xiaozhiandroid.data.config.AppConfig
-import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
-import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
 import com.er1cmo.xiaozhiandroid.data.ota.ActivationState
-import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
 import com.er1cmo.xiaozhiandroid.domain.ConversationController
 import com.er1cmo.xiaozhiandroid.domain.ConversationState
 import com.er1cmo.xiaozhiandroid.domain.ConversationUiState
+import com.er1cmo.xiaozhiandroid.core.AppController
+import com.er1cmo.xiaozhiandroid.core.AppEvent
 import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -25,13 +22,17 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 class MainViewModel(
-    private val configRepository: ConfigRepository,
-    private val deviceIdentityManager: DeviceIdentityManager,
-    private val otaActivationClient: OtaActivationClient,
-    private val xiaozhiWebSocketClient: XiaozhiWebSocketClient,
-    private val audioEngine: AudioEngine,
-    private val appScope: CoroutineScope,
+    private val appController: AppController,
 ) : ConversationController {
+    private val configRepository = appController.configRepository
+    private val deviceIdentityManager = appController.deviceIdentityManager
+    private val otaActivationClient = appController.otaActivationClient
+    private val xiaozhiWebSocketClient = appController.xiaozhiWebSocketClient
+    private val audioEngine = appController.audioEngine
+    private val appScope = appController.appScope
+    private val stateMachine = appController.conversationStateMachine
+    private val eventBus = appController.eventBus
+
     var uiState by mutableStateOf(ConversationUiState())
         private set
 
@@ -258,12 +259,11 @@ class MainViewModel(
         autoReconnectJob?.cancel()
         autoReconnectJob = null
         pendingTextAfterReconnect = null
-        audioEngine.stopRecording()
-        audioEngine.stopPlayback(
-            onLog = ::appendLocalLogFromAnyThread,
-            onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+        appController.closeRuntime(
+            reason = "user_close",
+            onAudioLog = ::appendLocalLogFromAnyThread,
+            onAudioStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
         )
-        xiaozhiWebSocketClient.close("user_close")
         uiState = uiState.copy(
             conversationState = ConversationState.Idle,
             websocketStatus = "已手动关闭",
@@ -335,7 +335,7 @@ class MainViewModel(
         }
 
         uiState = uiState.copy(
-            conversationState = ConversationState.Listening,
+            conversationState = stateMachine.onListening(),
             audioUplinkStatus = "正在启动录音",
         )
         appendLocalLog("已发送 listen/start/manual，开始麦克风录音与 Opus 上行")
@@ -455,6 +455,7 @@ class MainViewModel(
     }
 
     fun appendLocalLog(message: String) {
+        eventBus.publish(AppEvent.Log(message))
         if (message == lastLogMessage) {
             repeatedLogCount += 1
             if (repeatedLogCount % REPEATED_LOG_REPORT_INTERVAL != 0) return
@@ -658,6 +659,8 @@ class MainViewModel(
         return XiaozhiWebSocketClient.Callbacks(
             onLog = ::appendLocalLog,
             onConnected = { sessionId ->
+                stateMachine.onConnected()
+                eventBus.publish(AppEvent.ProtocolConnected(sessionId))
                 uiState = uiState.copy(
                     conversationState = ConversationState.Connected,
                     websocketStatus = "已连接",
@@ -798,7 +801,7 @@ class MainViewModel(
 
         uiState = uiState.copy(
             textInput = if (clearInput) "" else uiState.textInput,
-            conversationState = ConversationState.Thinking,
+            conversationState = stateMachine.onThinking(),
             lastServerJson = "等待服务端 JSON 响应",
         )
         appendLocalLog("已发送 listen/detect/text：$text")
@@ -810,6 +813,7 @@ class MainViewModel(
     ) {
         val preview = prettyJson.take(MAX_JSON_PREVIEW_LENGTH)
         val state = jsonState(prettyJson)
+        eventBus.publish(AppEvent.IncomingJson(type = type, state = state, preview = preview))
         uiState = uiState.copy(lastServerJson = preview)
 
         when (type) {
@@ -864,6 +868,7 @@ class MainViewModel(
     }
 
     private fun handleIncomingAudioFrame(frame: ByteArray) {
+        eventBus.publish(AppEvent.IncomingAudio(frame.size))
         markVoiceResponseArrived("audio")
         downlinkOpusFrames += 1
         downlinkBytes += frame.size
@@ -873,7 +878,7 @@ class MainViewModel(
             onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
         )
         uiState = uiState.copy(
-            conversationState = ConversationState.Speaking,
+            conversationState = stateMachine.onSpeaking(),
             audioPlaybackStatus = "播放中，收到 ${downlinkOpusFrames} 帧",
         )
         if (downlinkOpusFrames == 1 || downlinkOpusFrames % DOWNLINK_LOG_INTERVAL_PACKETS == 0) {
@@ -893,7 +898,7 @@ class MainViewModel(
             lastVoiceTurnTimedOut = true
             val abortSent = xiaozhiWebSocketClient.sendAbort()
             uiState = uiState.copy(
-                conversationState = ConversationState.Connected,
+                conversationState = stateMachine.onConnected(),
                 audioUplinkStatus = "已停止，服务端未返回语音结果",
                 lastError = "语音响应等待超时，已清理服务端监听状态，可重试",
             )
@@ -949,12 +954,11 @@ class MainViewModel(
         autoReconnectJob = null
         autoReconnectAttempts = 0
         pendingTextAfterReconnect = null
-        audioEngine.stopRecording()
-        audioEngine.stopPlayback(
-            onLog = ::appendLocalLogFromAnyThread,
-            onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+        appController.closeRuntime(
+            reason = "settings_reconnect",
+            onAudioLog = ::appendLocalLogFromAnyThread,
+            onAudioStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
         )
-        xiaozhiWebSocketClient.close("settings_reconnect")
         uiState = uiState.copy(
             conversationState = ConversationState.Idle,
             websocketStatus = websocketStatus,

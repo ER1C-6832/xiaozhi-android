@@ -36,7 +36,7 @@ class ConversationStateMachine(
         return transitionTo(if (hasActiveSession) ConversationState.Connected else ConversationState.Idle)
     }
 
-    private fun transitionTo(next: ConversationState): ConversationState {
+    fun transitionTo(next: ConversationState): ConversationState {
         currentState = next
         return currentState
     }

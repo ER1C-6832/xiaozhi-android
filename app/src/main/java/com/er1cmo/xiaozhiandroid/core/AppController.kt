@@ -6,16 +6,22 @@ import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
 import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
 import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
 import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
+import com.er1cmo.xiaozhiandroid.conversation.ConversationSession
+import com.er1cmo.xiaozhiandroid.conversation.ConversationStateMachine
+import com.er1cmo.xiaozhiandroid.protocol.WebSocketXiaozhiProtocolClient
+import com.er1cmo.xiaozhiandroid.protocol.XiaozhiMessageRouter
+import com.er1cmo.xiaozhiandroid.protocol.XiaozhiProtocolClient
 import kotlinx.coroutines.CoroutineScope
 
 /**
  * Android app core container.
  *
- * Phase 8A-1 moves object construction and lifecycle ownership out of
- * AppNavigation. MainViewModel still owns most conversation behavior in this
- * step to keep the package low-risk; subsequent 8A steps will move state
- * transitions, protocol routing and MCP dispatch from MainViewModel into this
- * controller and its modules.
+ * Phase 8A-1 moved object construction and lifecycle ownership out of
+ * AppNavigation. Phase 8A-2 starts moving runtime ownership into this
+ * controller: protocol facade, session/state-machine objects and common
+ * runtime shutdown are now owned by AppController. MainViewModel remains the
+ * Compose presenter for this step, but it no longer constructs or directly
+ * owns the runtime graph.
  */
 class AppController private constructor(
     val appContext: Context,
@@ -28,7 +34,11 @@ class AppController private constructor(
     val deviceIdentityManager: DeviceIdentityManager,
     val otaActivationClient: OtaActivationClient,
     val xiaozhiWebSocketClient: XiaozhiWebSocketClient,
+    val protocolClient: XiaozhiProtocolClient,
+    val messageRouter: XiaozhiMessageRouter,
     val audioEngine: AudioEngine,
+    val conversationStateMachine: ConversationStateMachine,
+    val conversationSession: ConversationSession,
 ) {
     suspend fun start() {
         eventBus.emit(AppEvent.AppStarted)
@@ -40,6 +50,27 @@ class AppController private constructor(
         resourceRegistry.shutdown()
         moduleManager.disposeAll()
         eventBus.emit(AppEvent.AppStopped)
+    }
+
+    /**
+     * Close currently active runtime resources in a single place.
+     *
+     * UI flows still decide how to update their visible state, but the actual
+     * audio/protocol cleanup is centralized here so future MCP, wake word,
+     * CameraX and notification modules do not duplicate shutdown behavior.
+     */
+    fun closeRuntime(
+        reason: String,
+        onAudioLog: (String) -> Unit = {},
+        onAudioStatusChanged: (String) -> Unit = {},
+    ) {
+        audioEngine.stopRecording()
+        audioEngine.stopPlayback(
+            onLog = onAudioLog,
+            onStatusChanged = onAudioStatusChanged,
+        )
+        xiaozhiWebSocketClient.close(reason)
+        eventBus.publish(AppEvent.ProtocolDisconnected(reason))
     }
 
     private fun registerCoreModules() {
@@ -102,7 +133,10 @@ class AppController private constructor(
                 configRepository = configRepository,
                 appScope = appScope,
             )
+            val protocolClient = WebSocketXiaozhiProtocolClient(xiaozhiWebSocketClient)
             val audioEngine = AudioEngine(appScope)
+            val conversationStateMachine = ConversationStateMachine()
+            val conversationSession = ConversationSession()
 
             return AppController(
                 appContext = appContext,
@@ -115,7 +149,11 @@ class AppController private constructor(
                 deviceIdentityManager = deviceIdentityManager,
                 otaActivationClient = otaActivationClient,
                 xiaozhiWebSocketClient = xiaozhiWebSocketClient,
+                protocolClient = protocolClient,
+                messageRouter = XiaozhiMessageRouter,
                 audioEngine = audioEngine,
+                conversationStateMachine = conversationStateMachine,
+                conversationSession = conversationSession,
             ).apply {
                 registerCoreModules()
                 registerResources()

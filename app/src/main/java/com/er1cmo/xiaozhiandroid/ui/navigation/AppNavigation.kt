@@ -29,14 +29,7 @@ fun AppNavigation() {
         )
     }
     val viewModel = remember(appController) {
-        MainViewModel(
-            configRepository = appController.configRepository,
-            deviceIdentityManager = appController.deviceIdentityManager,
-            otaActivationClient = appController.otaActivationClient,
-            xiaozhiWebSocketClient = appController.xiaozhiWebSocketClient,
-            audioEngine = appController.audioEngine,
-            appScope = appController.appScope,
-        )
+        MainViewModel(appController = appController)
     }
     var currentScreen by remember { mutableStateOf(AppScreen.Main) }
 
