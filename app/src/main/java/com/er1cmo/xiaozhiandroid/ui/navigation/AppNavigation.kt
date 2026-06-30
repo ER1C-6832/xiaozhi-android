@@ -8,11 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import com.er1cmo.xiaozhiandroid.audio.AudioEngine
-import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
-import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
-import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
-import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
+import com.er1cmo.xiaozhiandroid.core.AppController
 import com.er1cmo.xiaozhiandroid.ui.main.MainScreen
 import com.er1cmo.xiaozhiandroid.ui.main.MainViewModel
 import com.er1cmo.xiaozhiandroid.ui.settings.SettingsScreen
@@ -26,27 +22,27 @@ private enum class AppScreen {
 fun AppNavigation() {
     val appContext = LocalContext.current.applicationContext
     val appScope = rememberCoroutineScope()
-    val configRepository = remember { ConfigRepository(appContext) }
-    val deviceIdentityManager = remember { DeviceIdentityManager(configRepository) }
-    val otaActivationClient = remember { OtaActivationClient(configRepository) }
-    val xiaozhiWebSocketClient = remember {
-        XiaozhiWebSocketClient(
-            configRepository = configRepository,
+    val appController = remember {
+        AppController.create(
+            context = appContext,
             appScope = appScope,
         )
     }
-    val audioEngine = remember { AudioEngine(appScope) }
-    val viewModel = remember {
+    val viewModel = remember(appController) {
         MainViewModel(
-            configRepository = configRepository,
-            deviceIdentityManager = deviceIdentityManager,
-            otaActivationClient = otaActivationClient,
-            xiaozhiWebSocketClient = xiaozhiWebSocketClient,
-            audioEngine = audioEngine,
-            appScope = appScope,
+            configRepository = appController.configRepository,
+            deviceIdentityManager = appController.deviceIdentityManager,
+            otaActivationClient = appController.otaActivationClient,
+            xiaozhiWebSocketClient = appController.xiaozhiWebSocketClient,
+            audioEngine = appController.audioEngine,
+            appScope = appController.appScope,
         )
     }
     var currentScreen by remember { mutableStateOf(AppScreen.Main) }
+
+    LaunchedEffect(appController) {
+        appController.start()
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.initialize()
