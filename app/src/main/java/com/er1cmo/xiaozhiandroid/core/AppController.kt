@@ -17,8 +17,12 @@ import com.er1cmo.xiaozhiandroid.protocol.ProtocolEvent
 import com.er1cmo.xiaozhiandroid.protocol.WebSocketXiaozhiProtocolClient
 import com.er1cmo.xiaozhiandroid.protocol.XiaozhiMessageRouter
 import com.er1cmo.xiaozhiandroid.protocol.XiaozhiProtocolClient
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 /**
  * Android app core container.
@@ -26,6 +30,7 @@ import kotlinx.coroutines.launch
  * Phase 8A moved runtime ownership, protocol callbacks and conversation state
  * into this controller. Phase 8B adds the Android MCP protocol layer here so
  * type=mcp JSON-RPC messages can be handled without growing MainViewModel.
+ * Phase 8B-1 makes MCP request/call/response flow observable in debug logs.
  */
 class AppController private constructor(
     val appContext: Context,
@@ -125,13 +130,28 @@ class AppController private constructor(
     }
 
     private fun handleMcpMessage(event: ProtocolEvent.JsonMessage) {
+        val trace = mcpTraceFrom(event.prettyJson)
+        appendMcpDebugLog("MCP 收到请求：method=${trace.method}, id=${trace.requestId}, tool=${trace.toolName}")
         appScope.launch {
             val handled = mcpServer.handleProtocolMessage(
                 protocolMessage = event.prettyJson,
-                sendResponse = { payload -> protocolClient.sendMcpMessage(payload) },
-                onLog = { message -> eventBus.publish(AppEvent.Log(message)) },
+                sendResponse = { payload ->
+                    val sent = protocolClient.sendMcpMessage(payload)
+                    val hasError = payload.has("error")
+                    val responsePreview = mcpResponsePreview(payload)
+                    appendMcpDebugLog(
+                        "MCP 响应已发送：method=${trace.method}, id=${trace.requestId}, success=$sent, error=$hasError",
+                        lastJson = responsePreview,
+                    )
+                    sent
+                },
+                onLog = { message ->
+                    eventBus.publish(AppEvent.Log(message))
+                    appendMcpDebugLog(message)
+                },
                 onToolStarted = { toolName, requestId ->
                     eventBus.publish(AppEvent.ToolCallStarted(toolName, requestId))
+                    appendMcpDebugLog("MCP 工具开始：$toolName id=$requestId")
                 },
                 onToolFinished = { toolName, requestId, success, message ->
                     eventBus.publish(
@@ -142,12 +162,61 @@ class AppController private constructor(
                             message = message,
                         ),
                     )
+                    appendMcpDebugLog("MCP 工具完成：$toolName id=$requestId success=$success message=$message")
                 },
             )
             if (!handled) {
-                eventBus.publish(AppEvent.Log("MCP 消息未处理：payload 缺失或格式错误"))
+                val message = "MCP 消息未处理：payload 缺失或格式错误"
+                eventBus.publish(AppEvent.Log(message))
+                appendMcpDebugLog(message)
             }
         }
+    }
+
+    private fun appendMcpDebugLog(
+        message: String,
+        lastJson: String? = null,
+    ) {
+        val line = "${timestamp()} $message"
+        stateStore.update { state ->
+            state.copy(
+                debugLogs = (state.debugLogs + line).takeLast(MAX_DEBUG_LOG_LINES),
+                lastServerJson = lastJson ?: state.lastServerJson,
+            )
+        }
+    }
+
+    private fun mcpTraceFrom(protocolMessage: String): McpTrace {
+        val wrapper = runCatching { JSONObject(protocolMessage) }.getOrNull()
+        val payload = when (val rawPayload = wrapper?.opt("payload")) {
+            is JSONObject -> rawPayload
+            is String -> runCatching { JSONObject(rawPayload) }.getOrNull()
+            else -> null
+        }
+        val method = payload?.optString("method", "unknown")?.ifBlank { "unknown" } ?: "unknown"
+        val requestId = when {
+            payload == null -> "unknown"
+            !payload.has("id") || payload.isNull("id") -> "none"
+            else -> payload.opt("id").toString()
+        }
+        val toolName = payload
+            ?.optJSONObject("params")
+            ?.optString("name", "-")
+            ?.ifBlank { "-" }
+            ?: "-"
+        return McpTrace(method = method, requestId = requestId, toolName = toolName)
+    }
+
+    private fun mcpResponsePreview(payload: JSONObject): String {
+        val wrapper = JSONObject()
+            .put("type", "mcp")
+            .put("direction", "android_response")
+            .put("payload", payload)
+        return wrapper.toString(2).take(MAX_EVENT_PREVIEW_LENGTH)
+    }
+
+    private fun timestamp(): String {
+        return SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
     }
 
     private fun registerCoreModules() {
@@ -193,8 +262,15 @@ class AppController private constructor(
         }
     }
 
+    private data class McpTrace(
+        val method: String,
+        val requestId: String,
+        val toolName: String,
+    )
+
     companion object {
         private const val MAX_EVENT_PREVIEW_LENGTH = 1_500
+        private const val MAX_DEBUG_LOG_LINES = 120
 
         fun create(
             context: Context,
