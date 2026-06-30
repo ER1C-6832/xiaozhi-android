@@ -39,6 +39,7 @@ class MainViewModel(
     private var hasStartedConfigCollection = false
     private var isOtaActivationRunning = false
     private var isWebSocketConnecting = false
+    private var isStoppingListening = false
     private var manualCloseRequested = false
     private var autoReconnectJob: Job? = null
     private var voiceResponseWatchdogJob: Job? = null
@@ -180,8 +181,8 @@ class MainViewModel(
     }
 
     override fun startManualListening() {
-        if (audioEngine.isRecording()) {
-            appendLocalLog("音频上行已在运行")
+        if (audioEngine.isRecording() || isStoppingListening) {
+            appendLocalLog("音频上行正在启动或停止，请稍候")
             return
         }
 
@@ -227,29 +228,74 @@ class MainViewModel(
     }
 
     override fun stopListening() {
+        if (isStoppingListening) {
+            appendLocalLog("停止聆听流程正在处理，请稍候")
+            return
+        }
+
         val wasRecording = audioEngine.isRecording()
         val shouldSendStop = xiaozhiWebSocketClient.hasActiveSession() &&
             (wasRecording || uiState.conversationState == ConversationState.Listening)
-        audioEngine.stopRecording()
-        uiState = uiState.copy(
-            conversationState = when {
-                xiaozhiWebSocketClient.hasActiveSession() && wasRecording -> ConversationState.Thinking
-                xiaozhiWebSocketClient.hasActiveSession() -> ConversationState.Connected
-                else -> ConversationState.Idle
-            },
-            audioUplinkStatus = if (wasRecording) "停止中" else uiState.audioUplinkStatus,
-        )
-        if (shouldSendStop) {
-            val sent = xiaozhiWebSocketClient.sendStopListening()
-            if (sent) {
-                appendLocalLog("已发送 listen/stop，等待服务端 STT/TTS 响应")
-                if (wasRecording) scheduleVoiceResponseWatchdog()
-            } else {
-                appendLocalLog("listen/stop 发送失败，准备重连")
-                scheduleAutoReconnect("listen/stop 发送失败")
+        val stopSessionId = xiaozhiWebSocketClient.sessionId
+
+        if (!wasRecording && !shouldSendStop) {
+            appendLocalLog("停止聆听：当前没有录音上行")
+            return
+        }
+
+        isStoppingListening = true
+        uiState = uiState.copy(audioUplinkStatus = if (wasRecording) "停止录音中" else uiState.audioUplinkStatus)
+        appScope.launch {
+            try {
+                val stats = if (wasRecording) {
+                    audioEngine.stopRecordingAndAwait()
+                } else {
+                    audioEngine.recordingStats()
+                }
+                val hasUsefulAudio = stats.opusPackets >= MIN_VALID_VOICE_OPUS_PACKETS
+
+                uiState = uiState.copy(
+                    conversationState = when {
+                        xiaozhiWebSocketClient.hasActiveSession() && hasUsefulAudio -> ConversationState.Thinking
+                        xiaozhiWebSocketClient.hasActiveSession() -> ConversationState.Connected
+                        else -> ConversationState.Idle
+                    },
+                    audioUplinkStatus = if (wasRecording) {
+                        "已停止，PCM ${stats.pcmFrames} 帧，Opus ${stats.opusPackets} 帧"
+                    } else {
+                        uiState.audioUplinkStatus
+                    },
+                )
+
+                if (shouldSendStop) {
+                    val sent = xiaozhiWebSocketClient.sendStopListening()
+                    if (sent) {
+                        if (hasUsefulAudio) {
+                            appendLocalLog(
+                                "已发送 listen/stop，等待服务端 STT/TTS 响应" +
+                                    "（本次 Opus ${stats.opusPackets} 帧，session=$stopSessionId）",
+                            )
+                            scheduleVoiceResponseWatchdog()
+                        } else {
+                            uiState = uiState.copy(
+                                conversationState = if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle,
+                                lastError = "本次按住时间过短或未采集到有效语音帧",
+                            )
+                            appendLocalLog(
+                                "已发送 listen/stop，但本次没有有效 Opus 音频帧" +
+                                    "（PCM ${stats.pcmFrames}，Opus ${stats.opusPackets}），不等待服务端语音响应",
+                            )
+                        }
+                    } else {
+                        appendLocalLog("listen/stop 发送失败，准备重连")
+                        scheduleAutoReconnect("listen/stop 发送失败")
+                    }
+                } else if (!xiaozhiWebSocketClient.hasActiveSession()) {
+                    appendLocalLog("停止聆听：WebSocket 未连接或 session_id 缺失")
+                }
+            } finally {
+                isStoppingListening = false
             }
-        } else if (!xiaozhiWebSocketClient.hasActiveSession()) {
-            appendLocalLog("停止聆听：WebSocket 未连接或 session_id 缺失")
         }
     }
 
@@ -798,5 +844,6 @@ class MainViewModel(
         const val MAX_AUTO_RECONNECT_ATTEMPTS = 3
         const val REPEATED_LOG_REPORT_INTERVAL = 5
         const val VOICE_RESPONSE_TIMEOUT_MS = 12_000L
+        const val MIN_VALID_VOICE_OPUS_PACKETS = 5
     }
 }

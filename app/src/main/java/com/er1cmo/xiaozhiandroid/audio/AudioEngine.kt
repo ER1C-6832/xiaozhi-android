@@ -7,10 +7,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class AudioEngine(
     private val appScope: CoroutineScope,
 ) {
+    data class RecordingStats(
+        val pcmFrames: Int = 0,
+        val opusPackets: Int = 0,
+    )
+
     @Volatile
     private var recording = false
 
@@ -20,6 +26,9 @@ class AudioEngine(
     @Volatile
     private var playbackGeneration = 0
 
+    @Volatile
+    private var currentRecordingStats = RecordingStats()
+
     private var recordingJob: Job? = null
     private var playbackJob: Job? = null
     private var activeAudioRecord: AudioRecord? = null
@@ -28,6 +37,8 @@ class AudioEngine(
     fun isRecording(): Boolean = recording
 
     fun isPlaybackActive(): Boolean = playbackRunning
+
+    fun recordingStats(): RecordingStats = currentRecordingStats
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     fun startRecording(
@@ -41,6 +52,7 @@ class AudioEngine(
         }
 
         recording = true
+        currentRecordingStats = RecordingStats()
         onStatusChanged("录音启动中")
         recordingJob = appScope.launch(Dispatchers.IO) {
             val recorder = AudioRecorder()
@@ -49,9 +61,19 @@ class AudioEngine(
             var pcmFrames = 0
             var opusPackets = 0
             try {
+                if (!recording) {
+                    onLog("音频上行启动已取消：尚未打开麦克风")
+                    return@launch
+                }
+
                 encoder = OpusEncoder()
                 audioRecord = recorder.createAudioRecord()
                 activeAudioRecord = audioRecord
+                if (!recording) {
+                    onLog("音频上行启动已取消：AudioRecord 已创建但用户已松开")
+                    return@launch
+                }
+
                 audioRecord.startRecording()
                 onLog(
                     "音频上行启动：${AudioConstants.INPUT_SAMPLE_RATE}Hz/mono/" +
@@ -67,6 +89,7 @@ class AudioEngine(
                     val pcm = buffer.copyOf()
                     val presentationTimeUs = pcmFrames * AudioConstants.FRAME_DURATION_MS * 1_000L
                     pcmFrames += 1
+                    currentRecordingStats = RecordingStats(pcmFrames = pcmFrames, opusPackets = opusPackets)
                     val packets = encoder.encode(PcmFrame(pcm, presentationTimeUs))
                     for (packet in packets) {
                         if (packet.isEmpty()) continue
@@ -77,6 +100,7 @@ class AudioEngine(
                             break
                         }
                         opusPackets += 1
+                        currentRecordingStats = RecordingStats(pcmFrames = pcmFrames, opusPackets = opusPackets)
                     }
 
                     if (opusPackets > 0 && opusPackets % UPLINK_LOG_INTERVAL_PACKETS == 0) {
@@ -90,6 +114,7 @@ class AudioEngine(
             } finally {
                 recording = false
                 activeAudioRecord = null
+                currentRecordingStats = RecordingStats(pcmFrames = pcmFrames, opusPackets = opusPackets)
                 runCatching { audioRecord?.stop() }
                 runCatching { audioRecord?.release() }
                 runCatching { encoder?.release() }
@@ -103,6 +128,17 @@ class AudioEngine(
         if (!recording) return
         recording = false
         runCatching { activeAudioRecord?.stop() }
+    }
+
+    suspend fun stopRecordingAndAwait(timeoutMs: Long = RECORDING_STOP_JOIN_TIMEOUT_MS): RecordingStats {
+        val job = recordingJob
+        stopRecording()
+        if (job != null) {
+            withTimeoutOrNull(timeoutMs) {
+                job.join()
+            }
+        }
+        return currentRecordingStats
     }
 
     fun queuePlaybackFrame(
@@ -255,7 +291,6 @@ class AudioEngine(
                     onLog("TTS 播放异常：${exception.message ?: exception::class.java.simpleName}")
                 }
             } finally {
-                // Let AudioTrack drain the last buffered samples briefly before releasing.
                 if (playbackStarted && opusFrames > 0) {
                     runCatching { Thread.sleep(PLAYBACK_DRAIN_GRACE_MS) }
                 }
@@ -292,5 +327,6 @@ class AudioEngine(
         const val PLAYBACK_IDLE_TIMEOUT_MS = 350L
         const val MAX_IDLE_POLLS_AFTER_PLAYBACK = 3
         const val PLAYBACK_DRAIN_GRACE_MS = 180L
+        const val RECORDING_STOP_JOIN_TIMEOUT_MS = 1_500L
     }
 }
