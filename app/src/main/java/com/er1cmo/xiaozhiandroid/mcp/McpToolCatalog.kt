@@ -4,15 +4,15 @@ import com.er1cmo.xiaozhiandroid.domain.McpToolListItemUiState
 import org.json.JSONObject
 
 object McpToolCatalog {
-    private val highRiskToolNames = setOf(
-        "android.set_volume",
-        "android.set_ringer_mode",
-        "android.open_app",
-        "android.set_brightness",
-        "android.set_flashlight",
-        "android.set_clipboard_text",
-        "android.open_settings",
-    )
+    /**
+     * Current Android native tools are treated as normal user-facing controls.
+     *
+     * The confirmation mechanism is intentionally kept in AndroidMcpServer and
+     * decorateToolJson(); future tools that can delete data, write files,
+     * uninstall apps, send messages, make payments, or perform other destructive
+     * actions can be added to this set to require confirmed=true.
+     */
+    private val highRiskToolNames = emptySet<String>()
 
     private val categoryByTool = mapOf(
         "android.ping" to "测试",
@@ -49,7 +49,7 @@ object McpToolCatalog {
         return McpToolListItemUiState(
             name = toolName,
             category = categoryByTool[toolName] ?: "其他",
-            riskLevel = if (requiresConfirmation(toolName)) "高风险：需二次确认" else "低风险",
+            riskLevel = if (requiresConfirmation(toolName)) "高风险：需二次确认" else "普通工具",
             permissionHint = permissionHintByTool[toolName] ?: "无特殊权限要求。",
             enabled = true,
         )
