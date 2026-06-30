@@ -31,6 +31,7 @@ import androidx.core.content.ContextCompat
 import com.er1cmo.xiaozhiandroid.ui.main.components.AssistantFace
 import com.er1cmo.xiaozhiandroid.ui.main.components.BottomControlBar
 import com.er1cmo.xiaozhiandroid.ui.main.components.DebugLogPanel
+import com.er1cmo.xiaozhiandroid.ui.main.components.ToolCallPanel
 
 @Composable
 fun MainScreen(
@@ -96,6 +97,10 @@ fun MainScreen(
             AssistantFace(
                 state = uiState.conversationState,
                 modifier = Modifier.fillMaxWidth(),
+            )
+            ToolCallPanel(
+                toolCalls = uiState.mcpToolCalls,
+                lastMcpStatus = uiState.lastMcpStatus,
             )
             DebugLogPanel(
                 uiState = uiState,

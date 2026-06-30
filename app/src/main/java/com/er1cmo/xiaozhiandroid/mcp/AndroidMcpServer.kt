@@ -63,6 +63,7 @@ class AndroidMcpServer(
                 requestId = requestId,
                 params = payload.paramsObject(),
                 sendResponse = sendResponse,
+                onLog = onLog,
                 onToolStarted = onToolStarted,
                 onToolFinished = onToolFinished,
             )
@@ -103,6 +104,7 @@ class AndroidMcpServer(
         requestId: Any,
         params: JSONObject,
         sendResponse: (JSONObject) -> Boolean,
+        onLog: (String) -> Unit,
         onToolStarted: (toolName: String, requestId: String) -> Unit,
         onToolFinished: (toolName: String, requestId: String, success: Boolean, message: String) -> Unit,
     ) {
@@ -121,10 +123,20 @@ class AndroidMcpServer(
         val requestIdText = requestId.toString()
         val arguments = params.optJSONObject("arguments") ?: JSONObject()
         onToolStarted(toolName, requestIdText)
+
+        if (McpToolCatalog.requiresConfirmation(toolName) && !arguments.optBoolean("confirmed", false)) {
+            val message = "工具 $toolName 会修改 Android 本机状态，需要用户二次确认。用户确认后请重新调用，并在 arguments 中传 confirmed=true。"
+            val result = McpToolCallResult.text(message, isError = true)
+            replyResult(requestId, result.toJson(), sendResponse)
+            onLog("MCP 工具被二次确认拦截：$toolName id=$requestIdText")
+            onToolFinished(toolName, requestIdText, false, "requires_confirmation")
+            return
+        }
+
         try {
             val result = tool.call(arguments)
             replyResult(requestId, result.toJson(), sendResponse)
-            onToolFinished(toolName, requestIdText, true, "success")
+            onToolFinished(toolName, requestIdText, !result.isError, if (result.isError) "tool_result_error" else "success")
         } catch (exception: Exception) {
             val message = exception.message ?: exception::class.java.simpleName
             replyError(requestId, ERROR_INTERNAL, message, sendResponse)
@@ -186,7 +198,7 @@ class AndroidMcpServer(
         private const val JSON_RPC_VERSION = "2.0"
         private const val MCP_PROTOCOL_VERSION = "2024-11-05"
         private const val SERVER_NAME = "xiaozhi-android"
-        private const val SERVER_VERSION = "0.8B"
+        private const val SERVER_VERSION = "0.9"
         private const val ERROR_INVALID_REQUEST = -32600
         private const val ERROR_METHOD_NOT_FOUND = -32601
         private const val ERROR_INVALID_PARAMS = -32602

@@ -36,7 +36,7 @@ class McpToolRegistry {
                 }
             }
 
-            val toolJson = tool.toJson()
+            val toolJson = McpToolCatalog.decorateToolJson(tool.name, tool.toJson())
             val toolSize = toolJson.toString().length
             if (totalSize + toolSize + PAYLOAD_HEADROOM > maxPayloadSize) {
                 nextCursor = tool.name
@@ -57,7 +57,7 @@ class McpToolRegistry {
     }
 
     companion object {
-        private const val MAX_PAYLOAD_SIZE = 20_000
+        private const val MAX_PAYLOAD_SIZE = 8_000
         private const val PAYLOAD_HEADROOM = 100
     }
 }

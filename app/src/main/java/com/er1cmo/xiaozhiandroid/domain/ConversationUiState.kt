@@ -30,10 +30,40 @@ data class ConversationUiState(
     val activationVersion: String = "v2",
     val lastServerJson: String = "暂无",
     val debugLogs: List<String> = listOf("[本地] App 启动，等待操作"),
+    val mcpToolCount: Int = 0,
+    val mcpToolsPreview: List<McpToolListItemUiState> = emptyList(),
+    val mcpToolCalls: List<McpToolCallUiState> = emptyList(),
+    val lastMcpStatus: String = "等待 MCP 请求",
 ) {
     val statusLabel: String
         get() = conversationState.label
 
     val statusDescription: String
         get() = conversationState.description
+}
+
+data class McpToolListItemUiState(
+    val name: String,
+    val category: String,
+    val riskLevel: String,
+    val permissionHint: String,
+    val enabled: Boolean = true,
+)
+
+data class McpToolCallUiState(
+    val requestId: String,
+    val toolName: String,
+    val argumentsPreview: String,
+    val status: McpToolCallStatus,
+    val success: Boolean? = null,
+    val resultPreview: String = "等待结果",
+    val durationMs: Long? = null,
+    val startedAtText: String = "",
+)
+
+enum class McpToolCallStatus(val label: String) {
+    Running("执行中"),
+    Succeeded("成功"),
+    Failed("失败"),
+    Blocked("待确认"),
 }

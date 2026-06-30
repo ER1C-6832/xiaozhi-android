@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.er1cmo.xiaozhiandroid.domain.ConversationUiState
+import com.er1cmo.xiaozhiandroid.domain.McpToolListItemUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,17 +107,14 @@ fun SettingsScreen(
                                 localStatus = "正在重置网络配置"
                                 onResetNetwork()
                             }
-
                             ConfirmAction.ResetIdentity -> {
                                 localStatus = "正在重置设备身份"
                                 onResetIdentity()
                             }
-
                             ConfirmAction.Reactivate -> {
                                 localStatus = "正在重新 OTA / 激活"
                                 onReactivate()
                             }
-
                             ConfirmAction.ClearLogs -> {
                                 localStatus = "调试日志已清空"
                                 onClearLogs()
@@ -166,7 +164,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                text = "Phase 7B：设置动作统一接入主状态机，重置/重新激活会同步关闭连接并刷新主界面状态。",
+                text = "Phase 9：MCP 工具扩展与工具卡片 UI。工具调用会在主界面显示卡片，设置页展示真实 tools/list 预览。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -280,6 +278,17 @@ fun SettingsScreen(
                 )
             }
 
+            SettingsGroup(title = "MCP 本机工具") {
+                SettingRow(label = "工具数量", value = "${uiState.mcpToolCount}")
+                SettingRow(label = "最近状态", value = uiState.lastMcpStatus)
+                Text(
+                    text = "tools/list 真实预览。高风险工具会在 schema 中暴露 confirmed 参数，未确认时会返回 requires_confirmation，不会直接执行。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                McpToolsPreviewList(tools = uiState.mcpToolsPreview)
+            }
+
             SettingsGroup(title = "音频配置") {
                 SettingRow(label = "上行状态", value = uiState.audioUplinkStatus)
                 SettingRow(label = "播放状态", value = uiState.audioPlaybackStatus)
@@ -287,14 +296,13 @@ fun SettingsScreen(
                 SettingRow(label = "输出采样率", value = "48000Hz，当前固定")
                 SettingRow(label = "frame_duration", value = "20ms")
                 SettingRow(label = "Opus 参数", value = "MediaCodec Opus，后续可扩展 libopus")
-                SettingRow(label = "播放音量", value = "跟随系统媒体音量，后续包可加 App 内音量")
+                SettingRow(label = "播放音量", value = "跟随系统媒体音量，MCP 已支持读取/调节")
                 SettingRow(label = "模拟器麦克风", value = "Pixel 模拟器可能出现 100% 静音，语音验收以真机为准")
             }
 
-            SettingsGroup(title = "唤醒词 / 摄像头 / MCP 预留") {
+            SettingsGroup(title = "唤醒词 / 摄像头预留") {
                 SettingRow(label = "唤醒词", value = "UI 预留，第一版不实现离线唤醒")
                 SettingRow(label = "摄像头", value = "UI 预留，后续接 CameraX")
-                SettingRow(label = "MCP 工具", value = "本机工具开关、tools/list 预览、调试日志后续接入")
             }
 
             SettingsGroup(title = "调试工具") {
@@ -376,6 +384,64 @@ private fun SettingsGroup(
                 fontWeight = FontWeight.SemiBold,
             )
             content()
+        }
+    }
+}
+
+@Composable
+private fun McpToolsPreviewList(tools: List<McpToolListItemUiState>) {
+    if (tools.isEmpty()) {
+        Text(
+            text = "暂无工具。若刚启动 App，可返回主界面后再进入设置页刷新。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        tools.forEach { tool ->
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 1.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = tool.name,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = tool.category,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        text = tool.riskLevel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = tool.permissionHint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }
