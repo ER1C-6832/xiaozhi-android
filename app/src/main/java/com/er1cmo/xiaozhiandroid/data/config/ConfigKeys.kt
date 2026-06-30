@@ -18,4 +18,5 @@ object ConfigKeys {
     val WEBSOCKET_TOKEN = stringPreferencesKey("websocket_token")
     val ACTIVATION_VERSION = stringPreferencesKey("activation_version")
     val LAST_JSON = stringPreferencesKey("last_json")
+    val DEVELOPER_MODE_ENABLED = booleanPreferencesKey("developer_mode_enabled")
 }

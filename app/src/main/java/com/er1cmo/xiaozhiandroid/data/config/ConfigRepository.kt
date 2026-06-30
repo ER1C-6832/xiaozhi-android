@@ -46,6 +46,7 @@ class ConfigRepository(context: Context) {
                 activationVersion = preferences[ConfigKeys.ACTIVATION_VERSION]
                     ?: AppConfig.DEFAULT_ACTIVATION_VERSION,
                 lastJson = preferences[ConfigKeys.LAST_JSON].orEmpty(),
+                developerModeEnabled = preferences[ConfigKeys.DEVELOPER_MODE_ENABLED] ?: true,
             )
         }
 
@@ -62,6 +63,9 @@ class ConfigRepository(context: Context) {
             if (preferences[ConfigKeys.ACTIVATION_VERSION].isNullOrBlank()) {
                 preferences[ConfigKeys.ACTIVATION_VERSION] = AppConfig.DEFAULT_ACTIVATION_VERSION
             }
+            if (preferences[ConfigKeys.DEVELOPER_MODE_ENABLED] == null) {
+                preferences[ConfigKeys.DEVELOPER_MODE_ENABLED] = true
+            }
         }
     }
 
@@ -71,6 +75,38 @@ class ConfigRepository(context: Context) {
             preferences[ConfigKeys.DEVICE_ID] = identity.deviceId
             preferences[ConfigKeys.SERIAL_NUMBER] = identity.serialNumber
             preferences[ConfigKeys.HMAC_KEY] = identity.hmacKey
+        }
+    }
+
+    suspend fun updateSystemSettings(
+        otaUrl: String,
+        authorizationUrl: String,
+        websocketUrl: String,
+        websocketToken: String,
+        activationVersion: String,
+        developerModeEnabled: Boolean,
+    ) {
+        appContext.xiaozhiConfigDataStore.edit { preferences ->
+            preferences[ConfigKeys.OTA_URL] = otaUrl.ifBlank { AppConfig.DEFAULT_OTA_URL }
+            preferences[ConfigKeys.AUTHORIZATION_URL] = authorizationUrl.ifBlank {
+                AppConfig.DEFAULT_AUTHORIZATION_URL
+            }
+            preferences[ConfigKeys.ACTIVATION_VERSION] = activationVersion.ifBlank {
+                AppConfig.DEFAULT_ACTIVATION_VERSION
+            }
+            preferences[ConfigKeys.DEVELOPER_MODE_ENABLED] = developerModeEnabled
+
+            if (websocketUrl.isBlank()) {
+                preferences.remove(ConfigKeys.WEBSOCKET_URL)
+            } else {
+                preferences[ConfigKeys.WEBSOCKET_URL] = websocketUrl.trim()
+            }
+
+            if (websocketToken.isBlank()) {
+                preferences.remove(ConfigKeys.WEBSOCKET_TOKEN)
+            } else {
+                preferences[ConfigKeys.WEBSOCKET_TOKEN] = websocketToken.trim()
+            }
         }
     }
 
@@ -97,6 +133,49 @@ class ConfigRepository(context: Context) {
             preferences.remove(ConfigKeys.ACTIVATION_CODE)
             preferences.remove(ConfigKeys.ACTIVATION_CHALLENGE)
             preferences.remove(ConfigKeys.ACTIVATION_MESSAGE)
+        }
+    }
+
+    suspend fun clearActivationAndWebSocket() {
+        appContext.xiaozhiConfigDataStore.edit { preferences ->
+            preferences[ConfigKeys.ACTIVATION_STATUS] = false
+            preferences.remove(ConfigKeys.ACTIVATION_CODE)
+            preferences.remove(ConfigKeys.ACTIVATION_CHALLENGE)
+            preferences.remove(ConfigKeys.ACTIVATION_MESSAGE)
+            preferences.remove(ConfigKeys.WEBSOCKET_URL)
+            preferences.remove(ConfigKeys.WEBSOCKET_TOKEN)
+            preferences.remove(ConfigKeys.LAST_JSON)
+        }
+    }
+
+    suspend fun resetNetworkConfigToDefaults() {
+        appContext.xiaozhiConfigDataStore.edit { preferences ->
+            preferences[ConfigKeys.OTA_URL] = AppConfig.DEFAULT_OTA_URL
+            preferences[ConfigKeys.AUTHORIZATION_URL] = AppConfig.DEFAULT_AUTHORIZATION_URL
+            preferences[ConfigKeys.ACTIVATION_VERSION] = AppConfig.DEFAULT_ACTIVATION_VERSION
+            preferences[ConfigKeys.ACTIVATION_STATUS] = false
+            preferences.remove(ConfigKeys.ACTIVATION_CODE)
+            preferences.remove(ConfigKeys.ACTIVATION_CHALLENGE)
+            preferences.remove(ConfigKeys.ACTIVATION_MESSAGE)
+            preferences.remove(ConfigKeys.WEBSOCKET_URL)
+            preferences.remove(ConfigKeys.WEBSOCKET_TOKEN)
+            preferences.remove(ConfigKeys.LAST_JSON)
+        }
+    }
+
+    suspend fun clearIdentityAndActivation() {
+        appContext.xiaozhiConfigDataStore.edit { preferences ->
+            preferences.remove(ConfigKeys.CLIENT_ID)
+            preferences.remove(ConfigKeys.DEVICE_ID)
+            preferences.remove(ConfigKeys.SERIAL_NUMBER)
+            preferences.remove(ConfigKeys.HMAC_KEY)
+            preferences[ConfigKeys.ACTIVATION_STATUS] = false
+            preferences.remove(ConfigKeys.ACTIVATION_CODE)
+            preferences.remove(ConfigKeys.ACTIVATION_CHALLENGE)
+            preferences.remove(ConfigKeys.ACTIVATION_MESSAGE)
+            preferences.remove(ConfigKeys.WEBSOCKET_URL)
+            preferences.remove(ConfigKeys.WEBSOCKET_TOKEN)
+            preferences.remove(ConfigKeys.LAST_JSON)
         }
     }
 

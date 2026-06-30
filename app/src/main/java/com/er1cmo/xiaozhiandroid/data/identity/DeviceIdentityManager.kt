@@ -43,6 +43,11 @@ class DeviceIdentityManager(
         return identity
     }
 
+    suspend fun resetIdentity(): DeviceIdentity {
+        configRepository.clearIdentityAndActivation()
+        return ensureIdentity()
+    }
+
     private fun generatePseudoMac(clientId: String): String {
         val hash = sha256Bytes("$clientId|${UUID.randomUUID()}")
         val tail = hash.take(5).map { byte ->
