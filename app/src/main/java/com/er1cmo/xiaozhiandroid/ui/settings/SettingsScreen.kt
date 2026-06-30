@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -45,6 +46,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.er1cmo.xiaozhiandroid.domain.ConversationUiState
+import com.er1cmo.xiaozhiandroid.domain.McpToolCallStatus
+import com.er1cmo.xiaozhiandroid.domain.McpToolCallUiState
 import com.er1cmo.xiaozhiandroid.domain.McpToolListItemUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -164,7 +167,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                text = "Phase 9：MCP 工具扩展与工具卡片 UI。工具调用会在主界面显示卡片，设置页展示真实 tools/list 预览。",
+                text = "Phase 9：MCP 工具 UI 调整。主界面只弹出临时工具卡片，完整工具列表与调用历史保留在设置页。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -287,6 +290,13 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 McpToolsPreviewList(tools = uiState.mcpToolsPreview)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "最近工具调用历史",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                McpToolCallHistoryList(toolCalls = uiState.mcpToolCalls)
             }
 
             SettingsGroup(title = "音频配置") {
@@ -438,6 +448,78 @@ private fun McpToolsPreviewList(tools: List<McpToolListItemUiState>) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun McpToolCallHistoryList(toolCalls: List<McpToolCallUiState>) {
+    if (toolCalls.isEmpty()) {
+        Text(
+            text = "暂无工具调用历史。主界面会弹出最近一次工具调用，几秒后自动隐藏。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        toolCalls.forEach { call ->
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 1.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = call.toolName,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = call.status.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = when (call.status) {
+                                McpToolCallStatus.Running -> MaterialTheme.colorScheme.primary
+                                McpToolCallStatus.Succeeded -> MaterialTheme.colorScheme.secondary
+                                McpToolCallStatus.Failed -> MaterialTheme.colorScheme.error
+                                McpToolCallStatus.Blocked -> MaterialTheme.colorScheme.tertiary
+                            },
+                        )
+                    }
+                    Text(
+                        text = "id=${call.requestId}  ${call.startedAtText}" + call.durationMs?.let { "  ${it}ms" }.orEmpty(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (call.argumentsPreview.isNotBlank() && call.argumentsPreview != "{}") {
+                        Text(
+                            text = "参数：${call.argumentsPreview}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        text = "结果：${call.resultPreview}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 4,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

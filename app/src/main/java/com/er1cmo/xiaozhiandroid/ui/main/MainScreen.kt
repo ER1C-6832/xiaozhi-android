@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -86,29 +87,38 @@ fun MainScreen(
             )
         },
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(innerPadding),
         ) {
-            AssistantFace(
-                state = uiState.conversationState,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                AssistantFace(
+                    state = uiState.conversationState,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                DebugLogPanel(
+                    uiState = uiState,
+                    onToggleExpanded = viewModel::toggleDebugPanel,
+                    onConnectClick = viewModel::handleConnectionEntry,
+                    onClearLogs = viewModel::clearDebugLogs,
+                )
+                Spacer(modifier = Modifier.padding(bottom = 8.dp))
+            }
+
             ToolCallPanel(
                 toolCalls = uiState.mcpToolCalls,
                 lastMcpStatus = uiState.lastMcpStatus,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             )
-            DebugLogPanel(
-                uiState = uiState,
-                onToggleExpanded = viewModel::toggleDebugPanel,
-                onConnectClick = viewModel::handleConnectionEntry,
-                onClearLogs = viewModel::clearDebugLogs,
-            )
-            Spacer(modifier = Modifier.padding(bottom = 8.dp))
         }
     }
 }
