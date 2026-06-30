@@ -16,12 +16,12 @@ class BrightnessGetTool(
     private val context: Context,
 ) : McpTool {
     override val name: String = "android.get_brightness"
-    override val description: String = "获取系统亮度设置。优先读取 Android 的 float 亮度值；无法可靠读取时不返回猜测百分比。"
+    override val description: String = "获取系统亮度诊断信息。当前设备无法通过公开 API 可靠读取系统亮度滑杆百分比时，拒绝返回猜测百分比。"
     override val inputSchema: JSONObject = emptyObjectSchema()
 
     override fun call(arguments: JSONObject): McpToolCallResult {
         val resolver = context.contentResolver
-        val rawBrightness = Settings.System.getInt(resolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+        val rawBrightness = Settings.System.getInt(resolver, Settings.System.SCREEN_BRIGHTNESS, UNKNOWN_INT_VALUE)
         val modeValue = Settings.System.getInt(
             resolver,
             Settings.System.SCREEN_BRIGHTNESS_MODE,
@@ -29,35 +29,29 @@ class BrightnessGetTool(
         )
         val mode = if (modeValue == Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC) "automatic" else "manual"
         val settingsBrightnessFloat = readSettingsBrightnessFloat()
-        val percent = if (mode == "manual" && settingsBrightnessFloat != null) {
-            (settingsBrightnessFloat * 100.0f).roundToInt().coerceIn(0, 100)
-        } else {
-            null
-        }
-        val rawLinearPercent = if (rawBrightness in MIN_RAW_BRIGHTNESS_VALUE..MAX_RAW_BRIGHTNESS_VALUE) {
-            (rawBrightness * 100.0 / MAX_RAW_BRIGHTNESS_VALUE).roundToInt().coerceIn(0, 100)
-        } else {
-            null
-        }
-        val note = when {
-            mode == "automatic" -> "当前处于自动亮度模式，系统会根据环境光动态调整；不返回手动百分比，避免乱报。"
-            settingsBrightnessFloat != null -> "percent 来自 screen_brightness_float，通常更接近系统亮度滑杆。rawSystemBrightness 仅作诊断。"
-            rawBrightness >= 0 -> "当前系统未暴露可靠的 screen_brightness_float；rawSystemBrightness 与亮度滑杆可能是非线性关系，因此 percent 返回 null。"
-            else -> "无法读取可靠亮度值，因此 percent 返回 null。"
-        }
 
         return jsonTextResult(
             JSONObject()
                 .put("mode", mode)
-                .put("percent", percent ?: JSONObject.NULL)
-                .put("percentReliable", percent != null)
-                .put("percentSource", if (percent != null) "settings_system_float" else JSONObject.NULL)
-                .put("settingsBrightnessFloat", settingsBrightnessFloat ?: JSONObject.NULL)
-                .put("rawSystemBrightness", if (rawBrightness >= 0) rawBrightness else JSONObject.NULL)
-                .put("rawLinearPercent", rawLinearPercent ?: JSONObject.NULL)
-                .put("rawLinearPercentReliable", false)
+                .put("percent", JSONObject.NULL)
+                .put("percentReliable", false)
+                .put("percentStatus", "unsupported_on_this_device")
+                .put(
+                    "reason",
+                    "当前设备/厂商系统没有通过 Android 公开 API 暴露可靠的用户可见亮度滑杆百分比；" +
+                        "rawSystemBrightness 与系统亮度滑杆存在非线性映射，screen_brightness_float 也已验证不能稳定对应系统 UI。" +
+                        "因此本工具拒绝返回猜测百分比。",
+                )
                 .put("canWriteSettings", canWriteSettings())
-                .put("note", note),
+                .put(
+                    "diagnostics",
+                    JSONObject()
+                        .put("settingsBrightnessFloat", settingsBrightnessFloat ?: JSONObject.NULL)
+                        .put("rawSystemBrightness", if (rawBrightness >= 0) rawBrightness else JSONObject.NULL)
+                        .put("rawSystemBrightnessRange", "OEM-dependent; do not convert to percent")
+                        .put("rawLinearPercent", JSONObject.NULL)
+                        .put("rawLinearPercentReliable", false),
+                ),
         )
     }
 
@@ -77,10 +71,10 @@ class BrightnessSetTool(
     private val context: Context,
 ) : McpTool {
     override val name: String = "android.set_brightness"
-    override val description: String = "设置系统亮度。Android 6+ 的 WRITE_SETTINGS 是特殊权限，不能弹普通运行时权限框，缺少权限时会自动打开系统授权页。"
+    override val description: String = "尝试设置系统亮度。Android 6+ 的 WRITE_SETTINGS 是特殊权限，不能弹普通运行时权限框，缺少权限时会自动打开系统授权页。"
     override val inputSchema: JSONObject = objectSchema(
         properties = JSONObject()
-            .put("percent", numberProperty("手动亮度百分比，0 到 100。mode=manual 时需要。"))
+            .put("percent", numberProperty("请求设置的手动亮度百分比，0 到 100。mode=manual 时需要。注意：该值是请求值，不代表可可靠读取的系统滑杆真实值。"))
             .put(
                 "mode",
                 stringProperty(
@@ -118,9 +112,11 @@ class BrightnessSetTool(
                 return jsonTextResult(
                     JSONObject()
                         .put("mode", "automatic")
-                        .put("percent", JSONObject.NULL)
-                        .put("percentReliable", false)
-                        .put("note", "已开启自动亮度，实际亮度由系统根据环境光决定，不回报不可靠百分比。"),
+                        .put("requestedPercent", JSONObject.NULL)
+                        .put("actualPercent", JSONObject.NULL)
+                        .put("actualPercentReliable", false)
+                        .put("verification", "not_available_public_api")
+                        .put("note", "已请求开启自动亮度；实际亮度由系统根据环境光决定，本工具不回报不可靠百分比。"),
                 )
             }
 
@@ -146,9 +142,16 @@ class BrightnessSetTool(
                 JSONObject()
                     .put("mode", "manual")
                     .put("requestedPercent", requestedPercent.roundToInt())
+                    .put("actualPercent", JSONObject.NULL)
+                    .put("actualPercentReliable", false)
+                    .put("verification", "not_available_public_api")
                     .put("writtenSettingsBrightnessFloat", brightnessFloat)
                     .put("writtenRawCompatibilityBrightness", rawCompatibilityValue)
-                    .put("note", "已写入 screen_brightness_float，并同步写入 raw 亮度兼容值。再次调用 get_brightness 以系统实际保存值为准。"),
+                    .put(
+                        "note",
+                        "已尝试写入请求亮度，但当前设备的公开 API 不能可靠读取用户可见亮度滑杆真实百分比；" +
+                            "后续 get_brightness 不会返回猜测百分比。请以屏幕实际观感或系统设置界面为准。",
+                    ),
             )
         } catch (exception: SecurityException) {
             errorText("设置亮度失败：WRITE_SETTINGS 权限不可用，请重新授权后重试。")
@@ -170,5 +173,6 @@ class BrightnessSetTool(
 }
 
 private const val SCREEN_BRIGHTNESS_FLOAT_KEY = "screen_brightness_float"
+private const val UNKNOWN_INT_VALUE = -1
 private const val MIN_RAW_BRIGHTNESS_VALUE = 1
 private const val MAX_RAW_BRIGHTNESS_VALUE = 255
