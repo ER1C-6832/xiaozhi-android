@@ -12,6 +12,20 @@ import com.er1cmo.xiaozhiandroid.mcp.AndroidMcpServer
 import com.er1cmo.xiaozhiandroid.mcp.McpToolRegistry
 import com.er1cmo.xiaozhiandroid.mcp.tools.AndroidEchoTool
 import com.er1cmo.xiaozhiandroid.mcp.tools.AndroidPingTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.AppOpenTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.BatteryStatusTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.BrightnessGetTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.BrightnessSetTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.ClipboardSetTextTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.CurrentTimeTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.DeviceInfoTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.FlashlightSetTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.NetworkStatusTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.OpenSettingsTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.RingerModeGetTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.RingerModeSetTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.VolumeGetTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.VolumeSetTool
 import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
 import com.er1cmo.xiaozhiandroid.protocol.ProtocolEvent
 import com.er1cmo.xiaozhiandroid.protocol.WebSocketXiaozhiProtocolClient
@@ -31,6 +45,7 @@ import org.json.JSONObject
  * into this controller. Phase 8B adds the Android MCP protocol layer here so
  * type=mcp JSON-RPC messages can be handled without growing MainViewModel.
  * Phase 8B-1 makes MCP request/call/response flow observable in debug logs.
+ * Phase 8C registers the first batch of Android native tools.
  */
 class AppController private constructor(
     val appContext: Context,
@@ -292,6 +307,20 @@ class AppController private constructor(
             val mcpRegistry = McpToolRegistry().apply {
                 register(AndroidPingTool())
                 register(AndroidEchoTool())
+                register(DeviceInfoTool(appContext))
+                register(BatteryStatusTool(appContext))
+                register(NetworkStatusTool(appContext))
+                register(CurrentTimeTool())
+                register(VolumeGetTool(appContext))
+                register(VolumeSetTool(appContext))
+                register(RingerModeGetTool(appContext))
+                register(RingerModeSetTool(appContext))
+                register(AppOpenTool(appContext))
+                register(BrightnessGetTool(appContext))
+                register(BrightnessSetTool(appContext))
+                register(FlashlightSetTool(appContext))
+                register(ClipboardSetTextTool(appContext))
+                register(OpenSettingsTool(appContext))
             }
             val mcpServer = AndroidMcpServer(mcpRegistry)
             val audioEngine = AudioEngine(appScope)

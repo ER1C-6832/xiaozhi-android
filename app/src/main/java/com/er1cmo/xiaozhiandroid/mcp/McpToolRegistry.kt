@@ -57,7 +57,7 @@ class McpToolRegistry {
     }
 
     companion object {
-        private const val MAX_PAYLOAD_SIZE = 8_000
+        private const val MAX_PAYLOAD_SIZE = 20_000
         private const val PAYLOAD_HEADROOM = 100
     }
 }
