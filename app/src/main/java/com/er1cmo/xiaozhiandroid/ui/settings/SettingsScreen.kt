@@ -66,7 +66,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                text = "Phase 5 已接入 TTS 下行 Opus 解码和 AudioTrack 播放，当前修正了 Android MediaCodec Opus 解码输出 48kHz PCM 时的播放采样率。",
+                text = "Phase 6 已收敛完整对话状态机、自动重连、统一打断和异常回到可操作状态。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -80,14 +80,17 @@ fun SettingsScreen(
                 SettingRow(label = "激活版本", value = uiState.activationVersion)
             }
 
-            SettingsGroup(title = "网络配置") {
+            SettingsGroup(title = "网络与会话") {
                 SettingRow(label = "OTA URL", value = uiState.otaUrl)
                 SettingRow(label = "授权 URL", value = uiState.authorizationUrl)
                 SettingRow(label = "WebSocket URL", value = uiState.websocketUrl)
                 SettingRow(label = "访问令牌", value = uiState.websocketTokenStatus)
                 SettingRow(label = "OTA 状态", value = uiState.otaStatus)
                 SettingRow(label = "WebSocket", value = uiState.websocketStatus)
+                SettingRow(label = "自动重连", value = uiState.autoReconnectStatus)
                 SettingRow(label = "Session ID", value = uiState.sessionId)
+                SettingRow(label = "状态机", value = uiState.statusLabel)
+                SettingRow(label = "最近错误", value = uiState.lastError)
                 SettingRow(label = "最近 JSON", value = uiState.lastServerJson)
             }
 
@@ -98,6 +101,14 @@ fun SettingsScreen(
                 SettingRow(label = "上行帧长", value = "20ms / 320 samples / 640B PCM")
                 SettingRow(label = "上行编码器", value = "Android MediaCodec Opus")
                 SettingRow(label = "下行播放", value = "Opus -> PCM16 / 48kHz / AudioTrack")
+                SettingRow(label = "已知事项", value = "模拟器可能存在 TTS 轻微毛刺，需真机复测")
+            }
+
+            SettingsGroup(title = "调试与状态机") {
+                SettingRow(label = "调试日志", value = uiState.debugModeStatus)
+                SettingRow(label = "日志降噪", value = "连续重复日志会合并提示")
+                SettingRow(label = "异常策略", value = "断线后最多自动重连 3 次")
+                SettingRow(label = "打断策略", value = "停止播放、停止录音、发送 abort")
             }
 
             SettingsGroup(title = "后续阶段入口") {

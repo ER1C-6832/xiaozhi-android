@@ -38,8 +38,12 @@ class XiaozhiWebSocketClient(
 
     fun isConnected(): Boolean = connected && webSocket != null
 
+    fun isConnecting(): Boolean = connecting
+
+    fun hasActiveSession(): Boolean = isConnected() && sessionId.isNotBlank()
+
     suspend fun connect(callbacks: Callbacks): Boolean {
-        if (isConnected()) {
+        if (hasActiveSession()) {
             postLog(callbacks, "WebSocket 已连接，无需重复连接")
             return true
         }
@@ -91,9 +95,15 @@ class XiaozhiWebSocketClient(
                         return
                     }
 
+                    if (sessionId.isBlank()) {
+                        postError(callbacks, "服务端 hello 未返回 session_id，需要重新连接")
+                        if (!helloReceived.isCompleted) helloReceived.complete(false)
+                        return
+                    }
+
                     connected = true
                     connecting = false
-                    postLog(callbacks, "收到服务端 hello，session_id=${sessionId.ifBlank { "暂无" }}")
+                    postLog(callbacks, "收到服务端 hello，session_id=$sessionId")
                     postConnected(callbacks, sessionId)
                     postNetworkState(callbacks, NetworkState.Connected)
                     if (!helloReceived.isCompleted) helloReceived.complete(true)
@@ -117,6 +127,7 @@ class XiaozhiWebSocketClient(
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 connected = false
                 connecting = false
+                sessionId = ""
                 postClosed(callbacks, "WebSocket 已关闭：$code $reason")
                 postNetworkState(callbacks, NetworkState.Disconnected)
             }
@@ -124,6 +135,7 @@ class XiaozhiWebSocketClient(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 connected = false
                 connecting = false
+                sessionId = ""
                 val responseInfo = response?.let { "HTTP ${it.code}" }.orEmpty()
                 val message = listOf(responseInfo, t.message ?: t::class.java.simpleName)
                     .filter { it.isNotBlank() }
@@ -147,6 +159,7 @@ class XiaozhiWebSocketClient(
         } catch (_: TimeoutCancellationException) {
             connecting = false
             connected = false
+            sessionId = ""
             postError(callbacks, "等待服务端 hello 超时")
             close("hello_timeout")
             false
@@ -156,30 +169,31 @@ class XiaozhiWebSocketClient(
     }
 
     fun sendWakeText(text: String): Boolean {
-        return sendTextPayload(XiaozhiMessage.listenDetect(sessionId, text))
+        return sendSessionPayload(XiaozhiMessage.listenDetect(sessionId, text))
     }
 
     fun sendStartManualListening(): Boolean {
-        return sendTextPayload(XiaozhiMessage.startListening(sessionId, mode = "manual"))
+        return sendSessionPayload(XiaozhiMessage.startListening(sessionId, mode = "manual"))
     }
 
     fun sendStopListening(): Boolean {
-        return sendTextPayload(XiaozhiMessage.stopListening(sessionId))
+        return sendSessionPayload(XiaozhiMessage.stopListening(sessionId))
     }
 
     fun sendAbort(): Boolean {
-        return sendTextPayload(XiaozhiMessage.abort(sessionId))
+        return sendSessionPayload(XiaozhiMessage.abort(sessionId))
     }
 
     fun sendAudioFrame(opusFrame: ByteArray): Boolean {
         val socket = webSocket ?: return false
-        if (!isConnected()) return false
+        if (!hasActiveSession()) return false
         return socket.send(opusFrame.toByteString())
     }
 
     fun close(reason: String = "client_close") {
         connected = false
         connecting = false
+        sessionId = ""
         webSocket?.close(NORMAL_CLOSE_CODE, reason.take(MAX_CLOSE_REASON_LENGTH))
         webSocket = null
     }
@@ -191,12 +205,13 @@ class XiaozhiWebSocketClient(
             webSocket = null
             connected = false
             connecting = false
+            sessionId = ""
         }
     }
 
-    private fun sendTextPayload(message: String): Boolean {
+    private fun sendSessionPayload(message: String): Boolean {
         val socket = webSocket ?: return false
-        if (!isConnected()) return false
+        if (!hasActiveSession()) return false
         return socket.send(message)
     }
 

@@ -1,10 +1,11 @@
 package com.er1cmo.xiaozhiandroid.domain
 
 /**
- * Main conversation/network state for the Android client.
+ * Main product-facing conversation state for the Android client.
  *
- * Phase 1 only simulates these states locally. Later phases will update them
- * from DeviceIdentityManager, OtaActivationClient and XiaozhiWebSocketClient.
+ * Phase 6 keeps this list intentionally small so network, recording and TTS
+ * callbacks converge back to a predictable UI state instead of leaking transport
+ * details into the main screen.
  */
 enum class ConversationState(
     val label: String,
@@ -14,9 +15,9 @@ enum class ConversationState(
         label = "待命",
         description = "等待用户操作",
     ),
-    Disconnected(
-        label = "未连接",
-        description = "尚未连接小智服务端",
+    Activating(
+        label = "激活中",
+        description = "正在执行 OTA / 激活流程",
     ),
     Connecting(
         label = "连接中",
@@ -29,6 +30,10 @@ enum class ConversationState(
     Listening(
         label = "聆听中",
         description = "正在等待用户说话",
+    ),
+    Thinking(
+        label = "思考中",
+        description = "已收到输入，等待服务端回复",
     ),
     Speaking(
         label = "说话中",

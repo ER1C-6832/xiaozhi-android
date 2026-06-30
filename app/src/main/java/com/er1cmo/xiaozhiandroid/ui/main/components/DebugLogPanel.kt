@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.er1cmo.xiaozhiandroid.domain.ConversationState
 import com.er1cmo.xiaozhiandroid.domain.ConversationUiState
 
 @Composable
@@ -33,6 +34,21 @@ fun DebugLogPanel(
     onConnectClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val connectButtonText = when (uiState.conversationState) {
+        ConversationState.Activating,
+        ConversationState.Connecting -> "连接中"
+        ConversationState.Connected,
+        ConversationState.Listening,
+        ConversationState.Thinking,
+        ConversationState.Speaking -> "已连接"
+        ConversationState.Error -> "重连"
+        ConversationState.Idle -> "连接入口"
+    }
+    val connectEnabled = uiState.conversationState !in listOf(
+        ConversationState.Activating,
+        ConversationState.Connecting,
+    )
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -58,13 +74,17 @@ fun DebugLogPanel(
                         Text(if (uiState.isDebugExpanded) "收起" else "展开")
                     }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = onConnectClick) {
-                        Text("连接入口")
+                    Button(
+                        enabled = connectEnabled,
+                        onClick = onConnectClick,
+                    ) {
+                        Text(connectButtonText)
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
+            DebugInfoLine(label = "状态机", value = uiState.statusLabel)
             DebugInfoLine(label = "设备 ID", value = uiState.deviceId)
             DebugInfoLine(label = "Client ID", value = uiState.clientId)
             DebugInfoLine(label = "激活状态", value = uiState.activationStatus)
@@ -73,9 +93,13 @@ fun DebugLogPanel(
             }
             DebugInfoLine(label = "OTA 状态", value = uiState.otaStatus)
             DebugInfoLine(label = "WebSocket", value = uiState.websocketStatus)
+            DebugInfoLine(label = "自动重连", value = uiState.autoReconnectStatus)
             DebugInfoLine(label = "Session ID", value = uiState.sessionId)
             DebugInfoLine(label = "音频上行", value = uiState.audioUplinkStatus)
             DebugInfoLine(label = "TTS 播放", value = uiState.audioPlaybackStatus)
+            if (uiState.lastError != "暂无") {
+                DebugInfoLine(label = "最近错误", value = uiState.lastError)
+            }
             DebugInfoLine(label = "最近 JSON", value = uiState.lastServerJson)
 
             if (uiState.isDebugExpanded) {
