@@ -3,17 +3,16 @@ package com.er1cmo.xiaozhiandroid.domain
 /**
  * Main product-facing conversation state for the Android client.
  *
- * Phase 6 keeps this list intentionally small so network, recording and TTS
- * callbacks converge back to a predictable UI state instead of leaking transport
- * details into the main screen.
+ * Phase 10 adjusts the user-facing labels: Idle means the app is not connected,
+ * while Connected is the real standby state after WebSocket hello succeeds.
  */
 enum class ConversationState(
     val label: String,
     val description: String,
 ) {
     Idle(
-        label = "待命",
-        description = "等待用户操作",
+        label = "未连接",
+        description = "尚未连接服务端",
     ),
     Activating(
         label = "激活中",
@@ -24,16 +23,16 @@ enum class ConversationState(
         description = "正在连接服务端",
     ),
     Connected(
-        label = "已连接",
-        description = "服务端连接已建立",
+        label = "待命",
+        description = "已连接，等待你说话或输入",
     ),
     Listening(
         label = "聆听中",
-        description = "正在等待用户说话",
+        description = "正在捕捉你的声音",
     ),
     Thinking(
         label = "思考中",
-        description = "已收到输入，等待服务端回复",
+        description = "小智正在组织回复",
     ),
     Speaking(
         label = "说话中",

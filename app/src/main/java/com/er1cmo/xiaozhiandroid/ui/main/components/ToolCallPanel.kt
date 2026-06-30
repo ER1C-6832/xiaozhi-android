@@ -1,12 +1,19 @@
 package com.er1cmo.xiaozhiandroid.ui.main.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -20,21 +27,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.er1cmo.xiaozhiandroid.domain.McpToolCallStatus
 import com.er1cmo.xiaozhiandroid.domain.McpToolCallUiState
 import kotlinx.coroutines.delay
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Transient floating MCP card.
  *
- * Phase 9 initially rendered tool calls as a persistent main-screen panel. The
- * product behavior is now closer to a toast/card: show the latest call on top of
- * the main screen, keep it visible while running, and hide it a few seconds after
- * it reaches a final state. Full history stays in Settings.
+ * Shows only the latest tool call on top of the main screen. It auto-hides after
+ * a final state and can also be dismissed manually by swiping left or upward.
+ * Full history is kept in Settings.
  */
 @Composable
 fun ToolCallPanel(
@@ -44,12 +55,16 @@ fun ToolCallPanel(
 ) {
     val latestCall = toolCalls.firstOrNull()
     var visible by remember { mutableStateOf(false) }
+    var offsetX by remember(latestCall?.requestId) { mutableStateOf(0f) }
+    var offsetY by remember(latestCall?.requestId) { mutableStateOf(0f) }
 
     LaunchedEffect(
         latestCall?.requestId,
         latestCall?.status,
         latestCall?.resultPreview,
     ) {
+        offsetX = 0f
+        offsetY = 0f
         if (latestCall == null) {
             visible = false
             return@LaunchedEffect
@@ -61,53 +76,98 @@ fun ToolCallPanel(
         }
     }
 
-    if (!visible || latestCall == null) return
-
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        tonalElevation = 6.dp,
-        shadowElevation = 8.dp,
+    AnimatedVisibility(
+        visible = visible && latestCall != null,
+        enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
+        exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
+        modifier = modifier,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+        latestCall?.let { call ->
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                    .pointerInput(call.requestId) {
+                        detectDragGestures(
+                            onDrag = { _, dragAmount ->
+                                offsetX += dragAmount.x
+                                offsetY += dragAmount.y.coerceAtMost(14f)
+                            },
+                            onDragEnd = {
+                                val shouldDismiss = offsetX < -SWIPE_DISMISS_X || offsetY < -SWIPE_DISMISS_Y || abs(offsetX) > SWIPE_DISMISS_STRONG
+                                if (shouldDismiss) {
+                                    visible = false
+                                } else {
+                                    offsetX = 0f
+                                    offsetY = 0f
+                                }
+                            },
+                            onDragCancel = {
+                                offsetX = 0f
+                                offsetY = 0f
+                            },
+                        )
+                    },
+                shape = RoundedCornerShape(24.dp),
+                tonalElevation = 8.dp,
+                shadowElevation = 16.dp,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(
+                                    cardTint(call.status),
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+                                ),
+                            ),
+                        )
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "本机工具调用",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = call.toolName,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text(
+                            text = call.status.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = statusColor(call.status),
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                     Text(
-                        text = "正在使用本机工具",
-                        style = MaterialTheme.typography.labelMedium,
+                        text = lastMcpStatus,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = latestCall.toolName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    FloatingToolCallCard(call = call)
+                    Text(
+                        text = "上滑或左滑可关闭，完整历史在设置页查看。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                Text(
-                    text = latestCall.status.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = statusColor(latestCall.status),
-                )
             }
-            Text(
-                text = lastMcpStatus,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            FloatingToolCallCard(call = latestCall)
         }
     }
 }
@@ -130,7 +190,7 @@ private fun FloatingToolCallCard(call: McpToolCallUiState) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(containerColor, RoundedCornerShape(14.dp))
+            .background(containerColor, RoundedCornerShape(16.dp))
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
@@ -158,6 +218,16 @@ private fun statusColor(status: McpToolCallStatus): androidx.compose.ui.graphics
 }
 
 @Composable
+private fun cardTint(status: McpToolCallStatus): androidx.compose.ui.graphics.Color {
+    return when (status) {
+        McpToolCallStatus.Running -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+        McpToolCallStatus.Succeeded -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.16f)
+        McpToolCallStatus.Failed -> MaterialTheme.colorScheme.error.copy(alpha = 0.18f)
+        McpToolCallStatus.Blocked -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f)
+    }
+}
+
+@Composable
 private fun ToolMonospaceLine(
     label: String,
     value: String,
@@ -174,3 +244,6 @@ private fun ToolMonospaceLine(
 }
 
 private const val AUTO_HIDE_DELAY_MS = 4_500L
+private const val SWIPE_DISMISS_X = 72f
+private const val SWIPE_DISMISS_Y = 58f
+private const val SWIPE_DISMISS_STRONG = 170f

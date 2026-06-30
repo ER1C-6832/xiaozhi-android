@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -25,6 +27,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -64,61 +68,82 @@ fun MainScreen(
         }
     }
 
-    Scaffold(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing),
-        topBar = {
-            MainTopBar(
-                status = uiState.statusLabel,
-                onOpenSettings = onOpenSettings,
-            )
-        },
-        bottomBar = {
-            BottomControlBar(
-                textInput = uiState.textInput,
-                isManualMode = uiState.isManualMode,
-                onTextChanged = viewModel::updateTextInput,
-                onSendText = viewModel::sendText,
-                onStartListening = ::handleStartListening,
-                onStopListening = viewModel::stopManualListening,
-                onAbort = viewModel::abortConversation,
-                onToggleManualMode = viewModel::toggleManualMode,
-            )
-        },
-    ) { innerPadding ->
-        Box(
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        MaterialTheme.colorScheme.background,
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.24f),
+                        MaterialTheme.colorScheme.background,
+                    ),
+                ),
+            ),
+    ) {
+        Scaffold(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-        ) {
-            Column(
+                .windowInsetsPadding(WindowInsets.safeDrawing),
+            containerColor = Color.Transparent,
+            topBar = {
+                MainTopBar(
+                    status = uiState.statusLabel,
+                    onOpenSettings = onOpenSettings,
+                )
+            },
+            bottomBar = {
+                BottomControlBar(
+                    textInput = uiState.textInput,
+                    isManualMode = uiState.isManualMode,
+                    onTextChanged = viewModel::updateTextInput,
+                    onSendText = viewModel::sendText,
+                    onStartListening = ::handleStartListening,
+                    onStopListening = viewModel::stopManualListening,
+                    onAbort = viewModel::abortConversation,
+                    onToggleManualMode = viewModel::toggleManualMode,
+                )
+            },
+        ) { innerPadding ->
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .padding(innerPadding),
             ) {
-                AssistantFace(
-                    state = uiState.conversationState,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                DebugLogPanel(
-                    uiState = uiState,
-                    onToggleExpanded = viewModel::toggleDebugPanel,
-                    onConnectClick = viewModel::handleConnectionEntry,
-                    onClearLogs = viewModel::clearDebugLogs,
-                )
-                Spacer(modifier = Modifier.padding(bottom = 8.dp))
-            }
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(
+                        text = "Android 原生 AI 助手",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    AssistantFace(
+                        state = uiState.conversationState,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    DebugLogPanel(
+                        uiState = uiState,
+                        onToggleExpanded = viewModel::toggleDebugPanel,
+                        onConnectClick = viewModel::handleConnectionEntry,
+                        onClearLogs = viewModel::clearDebugLogs,
+                    )
+                    Spacer(modifier = Modifier.padding(bottom = 8.dp))
+                }
 
-            ToolCallPanel(
-                toolCalls = uiState.mcpToolCalls,
-                lastMcpStatus = uiState.lastMcpStatus,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-            )
+                ToolCallPanel(
+                    toolCalls = uiState.mcpToolCalls,
+                    lastMcpStatus = uiState.lastMcpStatus,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
         }
     }
 }
@@ -130,7 +155,9 @@ private fun MainTopBar(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        tonalElevation = 2.dp,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+        color = Color.Transparent,
     ) {
         Row(
             modifier = Modifier
@@ -142,8 +169,8 @@ private fun MainTopBar(
             Column {
                 Text(
                     text = "小智语音助手",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
                 )
                 Text(
                     text = "当前状态：$status",
@@ -151,8 +178,11 @@ private fun MainTopBar(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            OutlinedButton(onClick = onOpenSettings) {
-                Text("参数设置")
+            OutlinedButton(
+                shape = RoundedCornerShape(999.dp),
+                onClick = onOpenSettings,
+            ) {
+                Text("设置")
             }
         }
     }
