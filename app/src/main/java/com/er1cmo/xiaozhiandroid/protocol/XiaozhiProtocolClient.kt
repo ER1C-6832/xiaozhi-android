@@ -47,7 +47,7 @@ class WebSocketXiaozhiProtocolClient(
 fun NetworkState.toProtocolEventOrNull(): ProtocolEvent? {
     return when (this) {
         NetworkState.Connected -> null
-        NetworkState.Disconnected -> ProtocolEvent.Disconnected(label)
+        NetworkState.Disconnected -> ProtocolEvent.Closed(label)
         NetworkState.Error -> ProtocolEvent.Error(label)
         else -> null
     }
