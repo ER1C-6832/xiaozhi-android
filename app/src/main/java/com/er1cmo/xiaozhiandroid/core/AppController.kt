@@ -8,6 +8,7 @@ import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
 import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
 import com.er1cmo.xiaozhiandroid.conversation.ConversationSession
 import com.er1cmo.xiaozhiandroid.conversation.ConversationStateMachine
+import com.er1cmo.xiaozhiandroid.protocol.ProtocolEvent
 import com.er1cmo.xiaozhiandroid.protocol.WebSocketXiaozhiProtocolClient
 import com.er1cmo.xiaozhiandroid.protocol.XiaozhiMessageRouter
 import com.er1cmo.xiaozhiandroid.protocol.XiaozhiProtocolClient
@@ -17,11 +18,10 @@ import kotlinx.coroutines.CoroutineScope
  * Android app core container.
  *
  * Phase 8A-1 moved object construction and lifecycle ownership out of
- * AppNavigation. Phase 8A-2 starts moving runtime ownership into this
- * controller: protocol facade, session/state-machine objects and common
- * runtime shutdown are now owned by AppController. MainViewModel remains the
- * Compose presenter for this step, but it no longer constructs or directly
- * owns the runtime graph.
+ * AppNavigation. Phase 8A-2 started moving runtime ownership into this controller.
+ * Phase 8A-3 moves WebSocket callback adaptation and protocol message routing
+ * here as well: the UI presenter now receives ProtocolEvent values instead of
+ * raw WebSocket callbacks.
  */
 class AppController private constructor(
     val appContext: Context,
@@ -50,6 +50,35 @@ class AppController private constructor(
         resourceRegistry.shutdown()
         moduleManager.disposeAll()
         eventBus.emit(AppEvent.AppStopped)
+    }
+
+    suspend fun connectProtocol(
+        onEvent: (ProtocolEvent) -> Unit,
+    ): Boolean {
+        return protocolClient.connect(
+            callbacks = messageRouter.buildCallbacks { event ->
+                publishProtocolEvent(event)
+                onEvent(event)
+            },
+        )
+    }
+
+    fun publishProtocolEvent(event: ProtocolEvent) {
+        when (event) {
+            is ProtocolEvent.Log -> eventBus.publish(AppEvent.Log(event.message))
+            is ProtocolEvent.Connected -> eventBus.publish(AppEvent.ProtocolConnected(event.sessionId))
+            is ProtocolEvent.Closed -> eventBus.publish(AppEvent.ProtocolDisconnected(event.reason))
+            is ProtocolEvent.Error -> eventBus.publish(AppEvent.Error(event.message))
+            is ProtocolEvent.NetworkStateChanged -> Unit
+            is ProtocolEvent.JsonMessage -> eventBus.publish(
+                AppEvent.IncomingJson(
+                    type = event.type,
+                    state = event.state,
+                    preview = event.prettyJson.take(MAX_EVENT_PREVIEW_LENGTH),
+                ),
+            )
+            is ProtocolEvent.BinaryAudio -> eventBus.publish(AppEvent.IncomingAudio(event.data.size))
+        }
     }
 
     /**
@@ -117,6 +146,8 @@ class AppController private constructor(
     }
 
     companion object {
+        private const val MAX_EVENT_PREVIEW_LENGTH = 1_500
+
         fun create(
             context: Context,
             appScope: CoroutineScope,

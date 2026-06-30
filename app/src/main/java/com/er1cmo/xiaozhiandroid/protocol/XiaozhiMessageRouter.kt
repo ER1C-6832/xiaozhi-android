@@ -1,15 +1,30 @@
 package com.er1cmo.xiaozhiandroid.protocol
 
+import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
 import org.json.JSONObject
 
 /**
- * Protocol message classifier.
+ * Protocol message classifier and WebSocket callback adapter.
  *
- * MainViewModel currently still handles most JSON side effects. This router is
- * introduced before MCP so type=mcp can be routed to AndroidMcpServer without
- * growing the ViewModel again.
+ * Phase 8A-3 moves raw WebSocket callbacks out of MainViewModel. The UI layer
+ * now receives protocol-level events, while this router owns message
+ * classification for JSON, binary audio and connection status callbacks.
  */
 object XiaozhiMessageRouter {
+    fun buildCallbacks(
+        emit: (ProtocolEvent) -> Unit,
+    ): XiaozhiWebSocketClient.Callbacks {
+        return XiaozhiWebSocketClient.Callbacks(
+            onLog = { message -> emit(ProtocolEvent.Log(message)) },
+            onConnected = { sessionId -> emit(ProtocolEvent.Connected(sessionId)) },
+            onIncomingJson = { prettyJson, type -> emit(routeJson(prettyJson, type)) },
+            onBinaryFrame = { frame -> emit(routeBinaryAudio(frame)) },
+            onClosed = { reason -> emit(ProtocolEvent.Closed(reason)) },
+            onError = { message -> emit(ProtocolEvent.Error(message)) },
+            onNetworkStateChanged = { state -> emit(ProtocolEvent.NetworkStateChanged(state.label)) },
+        )
+    }
+
     fun routeJson(prettyJson: String, type: String): ProtocolEvent.JsonMessage {
         val json = runCatching { JSONObject(prettyJson) }.getOrNull()
         return ProtocolEvent.JsonMessage(

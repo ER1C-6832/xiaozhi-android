@@ -9,8 +9,7 @@ import com.er1cmo.xiaozhiandroid.domain.ConversationController
 import com.er1cmo.xiaozhiandroid.domain.ConversationState
 import com.er1cmo.xiaozhiandroid.domain.ConversationUiState
 import com.er1cmo.xiaozhiandroid.core.AppController
-import com.er1cmo.xiaozhiandroid.core.AppEvent
-import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
+import com.er1cmo.xiaozhiandroid.protocol.ProtocolEvent
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -19,7 +18,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 
 class MainViewModel(
     private val appController: AppController,
@@ -27,11 +25,10 @@ class MainViewModel(
     private val configRepository = appController.configRepository
     private val deviceIdentityManager = appController.deviceIdentityManager
     private val otaActivationClient = appController.otaActivationClient
-    private val xiaozhiWebSocketClient = appController.xiaozhiWebSocketClient
+    private val xiaozhiWebSocketClient = appController.protocolClient
     private val audioEngine = appController.audioEngine
     private val appScope = appController.appScope
     private val stateMachine = appController.conversationStateMachine
-    private val eventBus = appController.eventBus
 
     var uiState by mutableStateOf(ConversationUiState())
         private set
@@ -455,7 +452,6 @@ class MainViewModel(
     }
 
     fun appendLocalLog(message: String) {
-        eventBus.publish(AppEvent.Log(message))
         if (message == lastLogMessage) {
             repeatedLogCount += 1
             if (repeatedLogCount % REPEATED_LOG_REPORT_INTERVAL != 0) return
@@ -626,9 +622,12 @@ class MainViewModel(
         )
 
         val connected = try {
-            xiaozhiWebSocketClient.connect(
-                callbacks = buildWebSocketCallbacks(allowAutoReconnect),
-            )
+            appController.connectProtocol { event ->
+                handleProtocolEvent(
+                    event = event,
+                    allowAutoReconnect = allowAutoReconnect,
+                )
+            }
         } catch (exception: Exception) {
             val error = exception.message ?: exception::class.java.simpleName
             uiState = uiState.copy(
@@ -655,50 +654,44 @@ class MainViewModel(
         return connected
     }
 
-    private fun buildWebSocketCallbacks(allowAutoReconnect: Boolean): XiaozhiWebSocketClient.Callbacks {
-        return XiaozhiWebSocketClient.Callbacks(
-            onLog = ::appendLocalLog,
-            onConnected = { sessionId ->
-                stateMachine.onConnected()
-                eventBus.publish(AppEvent.ProtocolConnected(sessionId))
-                uiState = uiState.copy(
-                    conversationState = ConversationState.Connected,
-                    websocketStatus = "已连接",
-                    autoReconnectStatus = "已连接",
-                    sessionId = sessionId.ifBlank { "暂无" },
-                    lastError = "暂无",
-                )
-                appScope.launch {
-                    configRepository.setActivationStatus(true)
-                    configRepository.clearActivationData()
-                    appendLocalLog("WebSocket hello 成功，已同步激活状态")
-                }
-                flushPendingTextAfterReconnect()
-            },
-            onIncomingJson = { prettyJson, type ->
-                handleIncomingJson(prettyJson, type)
-            },
-            onBinaryFrame = { frame ->
-                handleIncomingAudioFrame(frame)
-            },
-            onClosed = { reason ->
-                handleSocketLost(
-                    reason = reason,
-                    asError = false,
-                    allowAutoReconnect = allowAutoReconnect,
-                )
-            },
-            onError = { message ->
-                handleSocketLost(
-                    reason = message,
-                    asError = true,
-                    allowAutoReconnect = allowAutoReconnect,
-                )
-            },
-            onNetworkStateChanged = { state ->
-                uiState = uiState.copy(websocketStatus = state.label)
-            },
+    private fun handleProtocolEvent(
+        event: ProtocolEvent,
+        allowAutoReconnect: Boolean,
+    ) {
+        when (event) {
+            is ProtocolEvent.Log -> appendLocalLog(event.message)
+            is ProtocolEvent.Connected -> handleProtocolConnected(event.sessionId)
+            is ProtocolEvent.JsonMessage -> handleIncomingJson(event)
+            is ProtocolEvent.BinaryAudio -> handleIncomingAudioFrame(event.data)
+            is ProtocolEvent.Closed -> handleSocketLost(
+                reason = event.reason,
+                asError = false,
+                allowAutoReconnect = allowAutoReconnect,
+            )
+            is ProtocolEvent.Error -> handleSocketLost(
+                reason = event.message,
+                asError = true,
+                allowAutoReconnect = allowAutoReconnect,
+            )
+            is ProtocolEvent.NetworkStateChanged -> uiState = uiState.copy(websocketStatus = event.label)
+        }
+    }
+
+    private fun handleProtocolConnected(sessionId: String) {
+        stateMachine.onConnected()
+        uiState = uiState.copy(
+            conversationState = ConversationState.Connected,
+            websocketStatus = "已连接",
+            autoReconnectStatus = "已连接",
+            sessionId = sessionId.ifBlank { "暂无" },
+            lastError = "暂无",
         )
+        appScope.launch {
+            configRepository.setActivationStatus(true)
+            configRepository.clearActivationData()
+            appendLocalLog("WebSocket hello 成功，已同步激活状态")
+        }
+        flushPendingTextAfterReconnect()
     }
 
     private fun handleSocketLost(
@@ -807,13 +800,10 @@ class MainViewModel(
         appendLocalLog("已发送 listen/detect/text：$text")
     }
 
-    private fun handleIncomingJson(
-        prettyJson: String,
-        type: String,
-    ) {
-        val preview = prettyJson.take(MAX_JSON_PREVIEW_LENGTH)
-        val state = jsonState(prettyJson)
-        eventBus.publish(AppEvent.IncomingJson(type = type, state = state, preview = preview))
+    private fun handleIncomingJson(event: ProtocolEvent.JsonMessage) {
+        val preview = event.prettyJson.take(MAX_JSON_PREVIEW_LENGTH)
+        val type = event.type
+        val state = event.state
         uiState = uiState.copy(lastServerJson = preview)
 
         when (type) {
@@ -868,7 +858,6 @@ class MainViewModel(
     }
 
     private fun handleIncomingAudioFrame(frame: ByteArray) {
-        eventBus.publish(AppEvent.IncomingAudio(frame.size))
         markVoiceResponseArrived("audio")
         downlinkOpusFrames += 1
         downlinkBytes += frame.size
@@ -1019,10 +1008,6 @@ class MainViewModel(
             },
             lastServerJson = config.lastJson.ifBlank { uiState.lastServerJson },
         )
-    }
-
-    private fun jsonState(prettyJson: String): String {
-        return runCatching { JSONObject(prettyJson).optString("state", "") }.getOrDefault("")
     }
 
     private fun timestamp(): String {
