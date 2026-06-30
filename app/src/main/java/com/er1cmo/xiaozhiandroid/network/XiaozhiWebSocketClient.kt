@@ -188,6 +188,10 @@ class XiaozhiWebSocketClient(
         return sendSessionPayload(XiaozhiMessage.abort(sessionId))
     }
 
+    fun sendMcpMessage(payload: JSONObject): Boolean {
+        return sendSessionPayload(XiaozhiMessage.mcp(sessionId, payload))
+    }
+
     fun sendAudioFrame(opusFrame: ByteArray): Boolean {
         return synchronized(sendLock) {
             val socket = webSocket ?: return@synchronized false

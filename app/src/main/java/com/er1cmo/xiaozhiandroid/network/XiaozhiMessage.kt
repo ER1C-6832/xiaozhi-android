@@ -67,6 +67,17 @@ object XiaozhiMessage {
             .toString()
     }
 
+    fun mcp(
+        sessionId: String,
+        payload: JSONObject,
+    ): String {
+        return JSONObject()
+            .put("session_id", sessionId)
+            .put("type", "mcp")
+            .put("payload", payload)
+            .toString()
+    }
+
     fun prettyJson(raw: String): String {
         return try {
             JSONObject(raw).toString(2)

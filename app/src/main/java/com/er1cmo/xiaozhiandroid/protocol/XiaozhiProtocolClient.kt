@@ -2,6 +2,7 @@ package com.er1cmo.xiaozhiandroid.protocol
 
 import com.er1cmo.xiaozhiandroid.network.NetworkState
 import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
+import org.json.JSONObject
 
 /** Protocol-facing abstraction over the current WebSocket client. */
 interface XiaozhiProtocolClient {
@@ -14,6 +15,7 @@ interface XiaozhiProtocolClient {
     fun sendStopListening(): Boolean
     fun sendAbort(): Boolean
     fun sendAudioFrame(opusFrame: ByteArray): Boolean
+    fun sendMcpMessage(payload: JSONObject): Boolean
     fun close(reason: String = "client_close")
 }
 
@@ -40,6 +42,8 @@ class WebSocketXiaozhiProtocolClient(
     override fun sendAbort(): Boolean = delegate.sendAbort()
 
     override fun sendAudioFrame(opusFrame: ByteArray): Boolean = delegate.sendAudioFrame(opusFrame)
+
+    override fun sendMcpMessage(payload: JSONObject): Boolean = delegate.sendMcpMessage(payload)
 
     override fun close(reason: String) = delegate.close(reason)
 }

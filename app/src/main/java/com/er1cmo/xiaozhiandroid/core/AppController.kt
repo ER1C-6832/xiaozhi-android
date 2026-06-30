@@ -2,27 +2,30 @@ package com.er1cmo.xiaozhiandroid.core
 
 import android.content.Context
 import com.er1cmo.xiaozhiandroid.audio.AudioEngine
+import com.er1cmo.xiaozhiandroid.conversation.ConversationSession
+import com.er1cmo.xiaozhiandroid.conversation.ConversationStateMachine
 import com.er1cmo.xiaozhiandroid.data.config.ConfigRepository
 import com.er1cmo.xiaozhiandroid.data.identity.DeviceIdentityManager
 import com.er1cmo.xiaozhiandroid.data.ota.OtaActivationClient
 import com.er1cmo.xiaozhiandroid.domain.ConversationState
+import com.er1cmo.xiaozhiandroid.mcp.AndroidMcpServer
+import com.er1cmo.xiaozhiandroid.mcp.McpToolRegistry
+import com.er1cmo.xiaozhiandroid.mcp.tools.AndroidEchoTool
+import com.er1cmo.xiaozhiandroid.mcp.tools.AndroidPingTool
 import com.er1cmo.xiaozhiandroid.network.XiaozhiWebSocketClient
-import com.er1cmo.xiaozhiandroid.conversation.ConversationSession
-import com.er1cmo.xiaozhiandroid.conversation.ConversationStateMachine
 import com.er1cmo.xiaozhiandroid.protocol.ProtocolEvent
 import com.er1cmo.xiaozhiandroid.protocol.WebSocketXiaozhiProtocolClient
 import com.er1cmo.xiaozhiandroid.protocol.XiaozhiMessageRouter
 import com.er1cmo.xiaozhiandroid.protocol.XiaozhiProtocolClient
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * Android app core container.
  *
- * Phase 8A-1 moved object construction and lifecycle ownership out of
- * AppNavigation. Phase 8A-2 started moving runtime ownership into this controller.
- * Phase 8A-3 moved WebSocket callback adaptation and protocol message routing
- * here as well. Phase 8A-4 moves conversation state transitions into this
- * controller and AppStateStore so MainViewModel is closer to a thin presenter.
+ * Phase 8A moved runtime ownership, protocol callbacks and conversation state
+ * into this controller. Phase 8B adds the Android MCP protocol layer here so
+ * type=mcp JSON-RPC messages can be handled without growing MainViewModel.
  */
 class AppController private constructor(
     val appContext: Context,
@@ -37,6 +40,7 @@ class AppController private constructor(
     val xiaozhiWebSocketClient: XiaozhiWebSocketClient,
     val protocolClient: XiaozhiProtocolClient,
     val messageRouter: XiaozhiMessageRouter,
+    val mcpServer: AndroidMcpServer,
     val audioEngine: AudioEngine,
     val conversationStateMachine: ConversationStateMachine,
     val conversationSession: ConversationSession,
@@ -64,57 +68,39 @@ class AppController private constructor(
         )
     }
 
-
-    fun transitionConversationState(
-        next: ConversationState,
-        reason: String,
-    ): ConversationState {
-        val from = conversationStateMachine.currentState
-        val resolved = conversationStateMachine.transitionTo(next, reason)
-        stateStore.update { state -> state.copy(conversationState = resolved) }
-        if (from != resolved) {
-            eventBus.publish(
-                AppEvent.ConversationStateChanged(
-                    from = from,
-                    to = resolved,
-                    reason = reason,
-                ),
-            )
-        }
-        return resolved
-    }
-
-    fun resetConversationState(reason: String): ConversationState {
-        return transitionConversationState(ConversationState.Idle, reason)
-    }
-
     fun publishProtocolEvent(event: ProtocolEvent) {
         when (event) {
             is ProtocolEvent.Log -> eventBus.publish(AppEvent.Log(event.message))
-            is ProtocolEvent.Connected -> {
-                transitionConversationState(ConversationState.Connected, "protocol_connected")
-                eventBus.publish(AppEvent.ProtocolConnected(event.sessionId))
-            }
-            is ProtocolEvent.Closed -> {
-                if (!event.reason.contains("reconnect", ignoreCase = true)) {
-                    transitionConversationState(ConversationState.Idle, "protocol_closed")
-                }
-                eventBus.publish(AppEvent.ProtocolDisconnected(event.reason))
-            }
-            is ProtocolEvent.Error -> {
-                transitionConversationState(ConversationState.Error, "protocol_error")
-                eventBus.publish(AppEvent.Error(event.message))
-            }
+            is ProtocolEvent.Connected -> eventBus.publish(AppEvent.ProtocolConnected(event.sessionId))
+            is ProtocolEvent.Closed -> eventBus.publish(AppEvent.ProtocolDisconnected(event.reason))
+            is ProtocolEvent.Error -> eventBus.publish(AppEvent.Error(event.message))
             is ProtocolEvent.NetworkStateChanged -> Unit
-            is ProtocolEvent.JsonMessage -> eventBus.publish(
-                AppEvent.IncomingJson(
-                    type = event.type,
-                    state = event.state,
-                    preview = event.prettyJson.take(MAX_EVENT_PREVIEW_LENGTH),
-                ),
-            )
+            is ProtocolEvent.JsonMessage -> {
+                eventBus.publish(
+                    AppEvent.IncomingJson(
+                        type = event.type,
+                        state = event.state,
+                        preview = event.prettyJson.take(MAX_EVENT_PREVIEW_LENGTH),
+                    ),
+                )
+                if (event.type == "mcp") {
+                    handleMcpMessage(event)
+                }
+            }
             is ProtocolEvent.BinaryAudio -> eventBus.publish(AppEvent.IncomingAudio(event.data.size))
         }
+    }
+
+    fun transitionConversationState(
+        nextState: ConversationState,
+        reason: String,
+    ): ConversationState {
+        val fromState = conversationStateMachine.currentState
+        val updated = conversationStateMachine.transitionTo(nextState, reason)
+        if (fromState != updated) {
+            eventBus.publish(AppEvent.ConversationStateChanged(fromState, updated, reason))
+        }
+        return updated
     }
 
     /**
@@ -135,8 +121,33 @@ class AppController private constructor(
             onStatusChanged = onAudioStatusChanged,
         )
         xiaozhiWebSocketClient.close(reason)
-        resetConversationState("close_runtime:$reason")
         eventBus.publish(AppEvent.ProtocolDisconnected(reason))
+    }
+
+    private fun handleMcpMessage(event: ProtocolEvent.JsonMessage) {
+        appScope.launch {
+            val handled = mcpServer.handleProtocolMessage(
+                protocolMessage = event.prettyJson,
+                sendResponse = { payload -> protocolClient.sendMcpMessage(payload) },
+                onLog = { message -> eventBus.publish(AppEvent.Log(message)) },
+                onToolStarted = { toolName, requestId ->
+                    eventBus.publish(AppEvent.ToolCallStarted(toolName, requestId))
+                },
+                onToolFinished = { toolName, requestId, success, message ->
+                    eventBus.publish(
+                        AppEvent.ToolCallFinished(
+                            toolName = toolName,
+                            requestId = requestId,
+                            success = success,
+                            message = message,
+                        ),
+                    )
+                },
+            )
+            if (!handled) {
+                eventBus.publish(AppEvent.Log("MCP 消息未处理：payload 缺失或格式错误"))
+            }
+        }
     }
 
     private fun registerCoreModules() {
@@ -157,7 +168,7 @@ class AppController private constructor(
         )
         moduleManager.register(
             object : AppModule {
-                override val name: String = "mcp-placeholder"
+                override val name: String = "mcp"
             },
         )
         moduleManager.register(
@@ -202,6 +213,11 @@ class AppController private constructor(
                 appScope = appScope,
             )
             val protocolClient = WebSocketXiaozhiProtocolClient(xiaozhiWebSocketClient)
+            val mcpRegistry = McpToolRegistry().apply {
+                register(AndroidPingTool())
+                register(AndroidEchoTool())
+            }
+            val mcpServer = AndroidMcpServer(mcpRegistry)
             val audioEngine = AudioEngine(appScope)
             val conversationStateMachine = ConversationStateMachine()
             val conversationSession = ConversationSession()
@@ -219,6 +235,7 @@ class AppController private constructor(
                 xiaozhiWebSocketClient = xiaozhiWebSocketClient,
                 protocolClient = protocolClient,
                 messageRouter = XiaozhiMessageRouter,
+                mcpServer = mcpServer,
                 audioEngine = audioEngine,
                 conversationStateMachine = conversationStateMachine,
                 conversationSession = conversationSession,
