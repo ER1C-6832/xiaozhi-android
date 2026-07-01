@@ -2,12 +2,7 @@ package com.er1cmo.xiaozhiandroid.ui.main.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
@@ -23,15 +18,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -53,9 +48,10 @@ import kotlin.math.sin
 /**
  * Aurora Fluid Gradient assistant visual.
  *
- * It deliberately contains no eyes, mouth, radar rings, strokes or mechanical
- * outlines. The assistant is represented by saturated, feathered radial
- * gradients layered with SrcOver so the colors stay vivid on a white card.
+ * The visual intentionally contains no face, eyes, mouth, radar rings, strokes or
+ * mechanical geometry. A monotonic frame-time drive is used instead of a
+ * repeating 0..2PI tween so slow states such as Connected/Ready never snap back
+ * after a half cycle.
  */
 @Composable
 fun AssistantFace(
@@ -98,29 +94,22 @@ fun AssistantFace(
         label = "aurora_color_b",
     )
 
-    val infiniteTransition = rememberInfiniteTransition(label = "aurora_time_drive")
-    val time by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = TWO_PI,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 6_000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "aurora_time",
-    )
-    val rotatingAngle by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 3_500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "aurora_rotating_angle",
-    )
+    val elapsedSeconds by produceState(initialValue = 0f) {
+        val startNanos = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { frameNanos ->
+                value = ((frameNanos - startNanos) / 1_000_000_000f).coerceAtLeast(0f)
+            }
+        }
+    }
+
+    val basePhase = elapsedSeconds * TWO_PI / BASE_CYCLE_SECONDS
+    val fluidPhase = basePhase * animationSpeedScale
+    val rotatingAngleRadians = elapsedSeconds * TWO_PI / THINKING_ORBIT_SECONDS
 
     val syntheticVolumeScale = when (state) {
-        ConversationState.Listening -> (0.18f + 0.82f * abs(sin(time * 2.7f))).coerceIn(0f, 1f)
-        ConversationState.Speaking -> (0.22f + 0.78f * abs(sin(time * 3.1f + 0.6f))).coerceIn(0f, 1f)
+        ConversationState.Listening -> (0.18f + 0.82f * abs(sin(elapsedSeconds * 2.7f))).coerceIn(0f, 1f)
+        ConversationState.Speaking -> (0.22f + 0.78f * abs(sin(elapsedSeconds * 3.1f + 0.6f))).coerceIn(0f, 1f)
         else -> 0f
     }
     val reactiveVolumeScale = if (volumeScale > 0f) {
@@ -143,52 +132,45 @@ fun AssistantFace(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Canvas(
-                modifier = Modifier
-                    .size(260.dp)
-                    .graphicsLayer {
-                        compositingStrategy = CompositingStrategy.Offscreen
-                    },
-            ) {
-                val center = Offset(size.width / 2f, size.height / 2f)
+            Canvas(modifier = Modifier.size(260.dp)) {
+                val canvasCenter = Offset(size.width / 2f, size.height / 2f)
                 val baseRadius = size.width * 0.25f
                 val d35 = 35.dp.toPx()
                 val d30 = 30.dp.toPx()
                 val d25 = 25.dp.toPx()
+                val d55 = 55.dp.toPx()
                 val orbitRadius = min(size.width, size.height) * 0.20f
-
-                val speakingScale = if (state == ConversationState.Speaking) {
-                    1f + reactiveVolumeScale * 0.15f
+                val effectiveFluidScale = if (state == ConversationState.Speaking) {
+                    fluidScale * (1f + reactiveVolumeScale * 0.15f)
                 } else {
-                    1f
+                    fluidScale
                 }
-                val effectiveFluidScale = fluidScale * speakingScale
-                val colorA = blendAuroraColor(ColorSlateGray.copy(alpha = 0.75f), animatedColorA, colorBlendRatio)
-                val colorB = blendAuroraColor(ColorSlateGray.copy(alpha = 0.46f), animatedColorB, colorBlendRatio)
+
+                val colorA = blendAuroraColor(ColorSlateGray, animatedColorA, colorBlendRatio)
+                val colorB = blendAuroraColor(ColorSlateGray.copy(alpha = 0.55f), animatedColorB, colorBlendRatio)
                 val listeningPerturb = if (state == ConversationState.Listening) reactiveVolumeScale * 0.35f else 0f
 
                 val radiusA = baseRadius * effectiveFluidScale *
-                    (1.0f + 0.15f * sin(time * 1.0f * animationSpeedScale) + listeningPerturb)
+                    (1.0f + 0.15f * sin(fluidPhase * 1.0f) + listeningPerturb)
                 val radiusB = baseRadius * effectiveFluidScale *
-                    (0.9f + 0.12f * cos(time * 1.3f * animationSpeedScale) + listeningPerturb)
+                    (0.9f + 0.12f * cos(fluidPhase * 1.3f) + listeningPerturb)
 
-                val defaultOffsetA = center + Offset(
-                    x = cos(time * 0.8f * animationSpeedScale) * d35,
-                    y = sin(time * 1.2f * animationSpeedScale) * d25,
+                val defaultOffsetA = canvasCenter + Offset(
+                    x = cos(fluidPhase * 0.80f) * d35,
+                    y = sin(fluidPhase * 0.80f) * d25,
                 )
-                val defaultOffsetB = center + Offset(
-                    x = sin(time * 1.1f * animationSpeedScale) * -d30,
-                    y = cos(time * 0.9f * animationSpeedScale) * d30,
+                val defaultOffsetB = canvasCenter + Offset(
+                    x = sin(fluidPhase * 0.90f + 1.35f) * -d30,
+                    y = cos(fluidPhase * 0.90f + 1.35f) * d30,
                 )
 
-                val orbitAngle = Math.toRadians(rotatingAngle.toDouble()).toFloat()
-                val thinkingOffsetA = center + Offset(
-                    x = cos(orbitAngle) * orbitRadius,
-                    y = sin(orbitAngle) * orbitRadius,
+                val thinkingOffsetA = canvasCenter + Offset(
+                    x = cos(rotatingAngleRadians) * orbitRadius,
+                    y = sin(rotatingAngleRadians) * orbitRadius,
                 )
-                val thinkingOffsetB = center + Offset(
-                    x = cos(orbitAngle + PI.toFloat()) * orbitRadius,
-                    y = sin(orbitAngle + PI.toFloat()) * orbitRadius,
+                val thinkingOffsetB = canvasCenter + Offset(
+                    x = cos(rotatingAngleRadians + PI.toFloat()) * orbitRadius,
+                    y = sin(rotatingAngleRadians + PI.toFloat()) * orbitRadius,
                 )
 
                 val centerA = if (state == ConversationState.Thinking) thinkingOffsetA else defaultOffsetA
@@ -208,16 +190,16 @@ fun AssistantFace(
                 )
 
                 if (state == ConversationState.Speaking) {
-                    val radiusC = baseRadius * (0.6f + reactiveVolumeScale * 0.4f)
-                    val centerC = center + Offset(
+                    val radiusC = baseRadius * effectiveFluidScale * (0.6f + reactiveVolumeScale * 0.4f)
+                    val centerC = canvasCenter + Offset(
                         x = 0f,
-                        y = 25.dp.toPx() + reactiveVolumeScale * 55.dp.toPx(),
+                        y = d25 + reactiveVolumeScale * d55,
                     )
                     drawFeatheredAuroraBlob(
-                        color = ColorSunsetAmber.copy(alpha = 0.8f),
+                        color = ColorSunsetAmber,
                         center = centerC,
                         radius = radiusC,
-                        globalAlpha = globalAlpha,
+                        globalAlpha = globalAlpha * 0.92f,
                     )
                 }
             }
@@ -249,11 +231,12 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFeatheredAurora
     radius: Float,
     globalAlpha: Float,
 ) {
+    val centerAlpha = auroraCenterAlpha(color) * globalAlpha
     drawCircle(
         brush = Brush.radialGradient(
             colors = listOf(
-                color.copy(alpha = (color.alpha * globalAlpha).coerceIn(0f, 1f)),
-                color.copy(alpha = (color.alpha * globalAlpha * 0.58f).coerceIn(0f, 1f)),
+                color.copy(alpha = centerAlpha.coerceIn(0f, 1f)),
+                color.copy(alpha = (centerAlpha * 0.48f).coerceIn(0f, 1f)),
                 Color.Transparent,
             ),
             center = center,
@@ -265,6 +248,24 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFeatheredAurora
     )
 }
 
+private fun auroraCenterAlpha(color: Color): Float {
+    return when {
+        color.sameRgb(ColorMistyBlue) -> 0.85f
+        color.sameRgb(ColorLilac) -> 0.80f
+        color.sameRgb(ColorPeach) -> 0.85f
+        color.sameRgb(ColorSlateGray) -> min(color.alpha, 0.75f)
+        color.sameRgb(ColorSunsetAmber) -> 0.80f
+        color.sameRgb(ColorRoseRed) -> 0.90f
+        else -> color.alpha.coerceIn(0.80f, 0.90f)
+    }
+}
+
+private fun Color.sameRgb(other: Color): Boolean {
+    return abs(red - other.red) < 0.002f &&
+        abs(green - other.green) < 0.002f &&
+        abs(blue - other.blue) < 0.002f
+}
+
 private fun ConversationState.toAuroraTarget(): AuroraTarget {
     return when (this) {
         ConversationState.Idle -> AuroraTarget(
@@ -272,57 +273,57 @@ private fun ConversationState.toAuroraTarget(): AuroraTarget {
             fluidScale = 0.9f,
             animationSpeedScale = 0.15f,
             colorBlendRatio = 0f,
-            colorA = ColorSlateGray.copy(alpha = 0.75f),
-            colorB = ColorSlateGray.copy(alpha = 0.46f),
+            colorA = ColorSlateGray,
+            colorB = ColorSlateGray.copy(alpha = 0.55f),
         )
         ConversationState.Connected -> AuroraTarget(
             globalAlpha = 0.95f,
             fluidScale = 1.0f,
             animationSpeedScale = 0.5f,
             colorBlendRatio = 1f,
-            colorA = ColorMistyBlue.copy(alpha = 0.85f),
-            colorB = ColorLilac.copy(alpha = 0.8f),
+            colorA = ColorMistyBlue,
+            colorB = ColorLilac,
         )
         ConversationState.Listening -> AuroraTarget(
             globalAlpha = 1.0f,
             fluidScale = 1.1f,
             animationSpeedScale = 2.0f,
             colorBlendRatio = 1f,
-            colorA = ColorPeach.copy(alpha = 0.85f),
-            colorB = ColorMistyBlue.copy(alpha = 0.85f),
+            colorA = ColorPeach,
+            colorB = ColorMistyBlue,
         )
         ConversationState.Thinking -> AuroraTarget(
             globalAlpha = 0.95f,
             fluidScale = 1.05f,
             animationSpeedScale = 1.8f,
             colorBlendRatio = 1f,
-            colorA = ColorMistyBlue.copy(alpha = 0.85f),
-            colorB = ColorLilac.copy(alpha = 0.8f),
+            colorA = ColorMistyBlue,
+            colorB = ColorLilac,
         )
         ConversationState.Speaking -> AuroraTarget(
             globalAlpha = 1.0f,
             fluidScale = 1.0f,
             animationSpeedScale = 1.2f,
             colorBlendRatio = 1f,
-            colorA = ColorPeach.copy(alpha = 0.85f),
-            colorB = ColorLilac.copy(alpha = 0.8f),
+            colorA = ColorPeach,
+            colorB = ColorLilac,
         )
         ConversationState.Error -> AuroraTarget(
             globalAlpha = 1.0f,
             fluidScale = 0.9f,
             animationSpeedScale = 0.4f,
             colorBlendRatio = 1f,
-            colorA = ColorRoseRed.copy(alpha = 0.9f),
-            colorB = ColorSlateGray.copy(alpha = 0.75f),
+            colorA = ColorRoseRed,
+            colorB = ColorSlateGray,
         )
         ConversationState.Activating,
         ConversationState.Connecting -> AuroraTarget(
-            globalAlpha = 0.95f,
+            globalAlpha = 0.92f,
             fluidScale = 0.98f,
             animationSpeedScale = 1.0f,
             colorBlendRatio = 1f,
-            colorA = ColorMistyBlue.copy(alpha = 0.85f),
-            colorB = ColorLilac.copy(alpha = 0.8f),
+            colorA = ColorMistyBlue,
+            colorB = ColorSunsetAmber.copy(alpha = 0.82f),
         )
     }
 }
@@ -350,4 +351,6 @@ private data class AuroraTarget(
     val colorB: Color,
 )
 
+private const val BASE_CYCLE_SECONDS = 6f
+private const val THINKING_ORBIT_SECONDS = 3.5f
 private const val TWO_PI = (2.0 * PI).toFloat()
