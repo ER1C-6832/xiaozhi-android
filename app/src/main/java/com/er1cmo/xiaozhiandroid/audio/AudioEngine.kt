@@ -39,35 +39,27 @@ class AudioEngine(
         val maxRecordingMs: Long = 16_000L,
         val autoStopOnSilence: Boolean = true,
         val rearmAfterSilenceMs: Long = 900L,
+        val suppressUplinkDuringPlayback: Boolean = false,
     ) {
         companion object {
             val Disabled = VadConfig(enabled = false)
             fun autoStop(): VadConfig = VadConfig(enabled = true)
 
             /**
-             * Streaming mode keeps the microphone uplink alive, but intentionally does not run
-             * local VAD / local barge-in detection.
+             * Streaming mode keeps the microphone open, but it must not use local energy VAD
+             * as a barge-in judge while the speaker is playing. Phone speakers leak into the
+             * mic even with Android AEC/NS enabled, and that echo was causing repeated false
+             * interruption, listen/speak state oscillation, and TTS queue clearing.
              *
-             * The previous 11C implementation reused local energy VAD to interrupt TTS. On phones,
-             * even with Android AEC/NS, residual speaker echo can still cross the local speech
-             * threshold and cause false "barge-in" events. py-xiaozhi's audio codec keeps input
-             * and output as independent continuous streams and does not use local playback energy to
-             * force UI state changes. Streaming mode follows that model here: audio is streamed to
-             * the server continuously, while explicit user abort remains available from the UI.
+             * Keep capture alive for fast resume, but gate uplink during TTS playback. This is
+             * intentionally conservative: manual interrupt remains available through the UI.
              */
             fun realtime(): VadConfig = VadConfig(
                 enabled = false,
-                speechPeakThreshold = 2_600,
-                speechRmsThreshold = 520,
-                silencePeakThreshold = 1_200,
-                silenceRmsThreshold = 320,
-                minSpeechFrames = 8,
-                trailingSilenceMs = 900L,
-                warmupMs = 200L,
+                autoStopOnSilence = false,
                 minRecordingMs = 0L,
                 maxRecordingMs = 24L * 60L * 60L * 1_000L,
-                autoStopOnSilence = false,
-                rearmAfterSilenceMs = 1_200L,
+                suppressUplinkDuringPlayback = true,
             )
         }
     }
@@ -152,6 +144,7 @@ class AudioEngine(
             var lastVadStatus = ""
             var noisePeakEma = 0f
             var noiseRmsEma = 0f
+            var suppressedPlaybackFrames = 0
 
             val warmupFrames = vadConfig.warmupMs.toFrames()
             val minRecordingFrames = vadConfig.minRecordingMs.toFrames()
@@ -267,7 +260,7 @@ class AudioEngine(
                     if (isSpeech) {
                         vadTrailingSilentFrames = 0
                     } else {
-                        // 自然对话尾静音累计只排除明确语音，避免轻微底噪拖长 stop。
+                        // 只要不是明确语音，就累计尾静音，避免背景噪声拖慢自然对话 stop。
                         vadTrailingSilentFrames += if (isQuiet) 1 else 1
                     }
                     if (vadConfig.autoStopOnSilence) {
@@ -321,14 +314,16 @@ class AudioEngine(
                 onLog(
                     "音频上行启动：${AudioConstants.INPUT_SAMPLE_RATE}Hz/mono/" +
                         "${AudioConstants.FRAME_DURATION_MS}ms，PCM ${AudioConstants.PCM_FRAME_BYTES}B/帧" +
-                        if (vadConfig.enabled) {
-                            if (vadConfig.autoStopOnSilence) "，自然对话 VAD 已启用" else "，流式对话 VAD 已启用"
-                        } else {
-                            ""
+                        when {
+                            vadConfig.enabled && vadConfig.autoStopOnSilence -> "，自然对话 VAD 已启用"
+                            vadConfig.enabled -> "，流式对话 VAD 已启用"
+                            vadConfig.suppressUplinkDuringPlayback -> "，流式对话回声门控已启用"
+                            else -> ""
                         },
                 )
                 onStatusChanged(
                     when {
+                        vadConfig.suppressUplinkDuringPlayback && audioProcessingConfig.enableAec -> "录音中，Android AEC + 回声门控"
                         vadConfig.enabled && audioProcessingConfig.enableAec -> "录音中，VAD + Android AEC"
                         vadConfig.enabled -> "录音中，VAD 自动停顿检测"
                         audioProcessingConfig.enableAec -> "录音中，Android AEC"
@@ -354,6 +349,22 @@ class AudioEngine(
                     pcmFrames += 1
                     updateStats()
                     inspectVad(frameLevel)
+
+                    if (vadConfig.suppressUplinkDuringPlayback && playbackRunning) {
+                        suppressedPlaybackFrames += 1
+                        if (suppressedPlaybackFrames == 1 || suppressedPlaybackFrames % PLAYBACK_UPLINK_SUPPRESSION_LOG_INTERVAL_FRAMES == 0) {
+                            onStatusChanged("流式对话：TTS 播放中暂停麦克风上行，避免回声误触发")
+                        }
+                        continue
+                    }
+
+                    if (suppressedPlaybackFrames > 0) {
+                        onLog(
+                            "流式对话：TTS 播放期间暂停麦克风上行 " +
+                                "${suppressedPlaybackFrames * AudioConstants.FRAME_DURATION_MS}ms，已恢复",
+                        )
+                        suppressedPlaybackFrames = 0
+                    }
 
                     val packets = encoder.encode(PcmFrame(pcm, presentationTimeUs))
                     for (packet in packets) {
@@ -646,5 +657,6 @@ class AudioEngine(
         const val RECORDING_STOP_JOIN_TIMEOUT_MS = 1_500L
         const val SILENCE_PEAK_THRESHOLD = 500
         const val NOISE_EMA_DECAY = 0.93f
+        const val PLAYBACK_UPLINK_SUPPRESSION_LOG_INTERVAL_FRAMES = 150
     }
 }
