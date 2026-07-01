@@ -44,6 +44,21 @@ class AudioEngine(
         }
     }
 
+    data class AudioProcessingConfig(
+        val enableAec: Boolean = true,
+        val enableNoiseSuppressor: Boolean = true,
+        val enableAgc: Boolean = false,
+    ) {
+        companion object {
+            val Default = AudioProcessingConfig()
+            val Disabled = AudioProcessingConfig(
+                enableAec = false,
+                enableNoiseSuppressor = false,
+                enableAgc = false,
+            )
+        }
+    }
+
     @Volatile
     private var recording = false
 
@@ -75,6 +90,7 @@ class AudioEngine(
         vadConfig: VadConfig = VadConfig.Disabled,
         onVadStatusChanged: ((String) -> Unit)? = null,
         onVadAutoStop: ((RecordingStats) -> Unit)? = null,
+        audioProcessingConfig: AudioProcessingConfig = AudioProcessingConfig.Default,
     ) {
         if (recording) {
             onLog("音频上行已在运行，忽略重复启动")
@@ -89,6 +105,7 @@ class AudioEngine(
         }
         recordingJob = appScope.launch(Dispatchers.IO) {
             val recorder = AudioRecorder()
+            var recordSession: AudioRecorder.RecordSession? = null
             var audioRecord: AudioRecord? = null
             var encoder: OpusEncoder? = null
             var pcmFrames = 0
@@ -232,8 +249,16 @@ class AudioEngine(
                 }
 
                 encoder = OpusEncoder()
-                audioRecord = recorder.createAudioRecord()
+                recordSession = recorder.createRecordSession(
+                    AudioRecorder.AudioProcessingRequest(
+                        enableAec = audioProcessingConfig.enableAec,
+                        enableNoiseSuppressor = audioProcessingConfig.enableNoiseSuppressor,
+                        enableAgc = audioProcessingConfig.enableAgc,
+                    ),
+                )
+                audioRecord = recordSession.audioRecord
                 activeAudioRecord = audioRecord
+                onLog("Android 音频处理：${recordSession.processingReport.summary}")
                 if (!recording) {
                     onLog("音频上行启动已取消：AudioRecord 已创建但用户已松开")
                     return@launch
@@ -245,7 +270,14 @@ class AudioEngine(
                         "${AudioConstants.FRAME_DURATION_MS}ms，PCM ${AudioConstants.PCM_FRAME_BYTES}B/帧" +
                         if (vadConfig.enabled) "，AUTO_STOP VAD 已启用" else "",
                 )
-                onStatusChanged(if (vadConfig.enabled) "录音中，VAD 自动停顿检测" else "录音中")
+                onStatusChanged(
+                    when {
+                        vadConfig.enabled && audioProcessingConfig.enableAec -> "录音中，VAD + Android AEC"
+                        vadConfig.enabled -> "录音中，VAD 自动停顿检测"
+                        audioProcessingConfig.enableAec -> "录音中，Android AEC"
+                        else -> "录音中"
+                    },
+                )
 
                 val buffer = ByteArray(AudioConstants.PCM_FRAME_BYTES)
                 while (recording) {
@@ -294,7 +326,14 @@ class AudioEngine(
                 activeAudioRecord = null
                 updateStats()
                 runCatching { audioRecord?.stop() }
-                runCatching { audioRecord?.release() }
+                runCatching {
+                    val session = recordSession
+                    if (session != null) {
+                        session.release()
+                    } else {
+                        audioRecord?.release()
+                    }
+                }
                 runCatching { encoder?.release() }
                 val stats = currentRecordingStats
                 onStatusChanged("已停止，累计发送 ${stats.opusPackets} 帧")
