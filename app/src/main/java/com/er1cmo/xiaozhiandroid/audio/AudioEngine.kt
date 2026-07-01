@@ -43,8 +43,20 @@ class AudioEngine(
         companion object {
             val Disabled = VadConfig(enabled = false)
             fun autoStop(): VadConfig = VadConfig(enabled = true)
+
+            /**
+             * Streaming mode keeps the microphone uplink alive, but intentionally does not run
+             * local VAD / local barge-in detection.
+             *
+             * The previous 11C implementation reused local energy VAD to interrupt TTS. On phones,
+             * even with Android AEC/NS, residual speaker echo can still cross the local speech
+             * threshold and cause false "barge-in" events. py-xiaozhi's audio codec keeps input
+             * and output as independent continuous streams and does not use local playback energy to
+             * force UI state changes. Streaming mode follows that model here: audio is streamed to
+             * the server continuously, while explicit user abort remains available from the UI.
+             */
             fun realtime(): VadConfig = VadConfig(
-                enabled = true,
+                enabled = false,
                 speechPeakThreshold = 2_600,
                 speechRmsThreshold = 520,
                 silencePeakThreshold = 1_200,
@@ -255,8 +267,7 @@ class AudioEngine(
                     if (isSpeech) {
                         vadTrailingSilentFrames = 0
                     } else {
-                        // py-xiaozhi 的交互更接近连续流：只要不是明确语音，就应该快速进入
-                        // 尾静音累计；否则背景噪声会让自然对话延迟好几秒。
+                        // 自然对话尾静音累计只排除明确语音，避免轻微底噪拖长 stop。
                         vadTrailingSilentFrames += if (isQuiet) 1 else 1
                     }
                     if (vadConfig.autoStopOnSilence) {
