@@ -1,7 +1,10 @@
 package com.er1cmo.xiaozhiandroid.ui.main.components
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,10 +17,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,15 +32,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import com.er1cmo.xiaozhiandroid.ui.theme.Charcoal
+import com.er1cmo.xiaozhiandroid.ui.theme.CharcoalPressed
+import com.er1cmo.xiaozhiandroid.ui.theme.OatBackground
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmBorder
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmSurface
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmText
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmTextSecondary
 
 @Composable
 fun BottomControlBar(
@@ -51,24 +62,16 @@ fun BottomControlBar(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
-        tonalElevation = 6.dp,
-        shadowElevation = 14.dp,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+        color = WarmSurface,
+        tonalElevation = 0.dp,
+        shadowElevation = 4.dp,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                        ),
-                    ),
-                )
-                .padding(horizontal = 14.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -76,20 +79,19 @@ fun BottomControlBar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 HoldToTalkButton(
-                    modifier = Modifier.weight(1.25f),
+                    modifier = Modifier.weight(1.35f),
                     onStartListening = onStartListening,
                     onStopListening = onStopListening,
                 )
-                PillActionButton(
+                MinimalAssistButton(
                     text = "打断",
-                    modifier = Modifier.weight(0.85f),
-                    danger = true,
                     onClick = onAbort,
+                    modifier = Modifier.weight(0.82f),
                 )
-                PillActionButton(
+                MinimalAssistButton(
                     text = if (isManualMode) "手动" else "自动",
-                    modifier = Modifier.weight(0.85f),
                     onClick = onToggleManualMode,
+                    modifier = Modifier.weight(0.82f),
                 )
             }
 
@@ -101,31 +103,62 @@ fun BottomControlBar(
                     modifier = Modifier.weight(1f),
                     value = textInput,
                     onValueChange = onTextChanged,
-                    placeholder = { Text("输入文字，或按住说话") },
+                    placeholder = {
+                        Text(
+                            text = "输入文字，或者按住说话",
+                            color = WarmTextSecondary,
+                        )
+                    },
                     singleLine = true,
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = OatBackground,
+                        unfocusedContainerColor = OatBackground,
+                        disabledContainerColor = OatBackground,
+                        focusedBorderColor = WarmTextSecondary.copy(alpha = 0.42f),
+                        unfocusedBorderColor = WarmBorder,
+                        focusedTextColor = WarmText,
+                        unfocusedTextColor = WarmText,
+                        cursorColor = WarmText,
+                    ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { onSendText() }),
                 )
                 Spacer(modifier = Modifier.width(10.dp))
-                Surface(
-                    modifier = Modifier.height(56.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    shadowElevation = 6.dp,
+                Button(
                     onClick = onSendText,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Charcoal,
+                        contentColor = Color.White,
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
+                    modifier = Modifier.height(52.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 18.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        Text("发送", fontWeight = FontWeight.SemiBold)
-                    }
+                    Text("发送", fontWeight = FontWeight.Medium)
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MinimalAssistButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        modifier = modifier.height(48.dp),
+        onClick = onClick,
+        shape = RoundedCornerShape(999.dp),
+        border = BorderStroke(1.dp, WarmBorder),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = WarmSurface,
+            contentColor = WarmText,
+        ),
+    ) {
+        Text(text, fontWeight = FontWeight.Light)
     }
 }
 
@@ -135,14 +168,18 @@ private fun HoldToTalkButton(
     onStopListening: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val haptic = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(targetValue = if (pressed) 0.965f else 1f, label = "hold-scale")
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.975f else 1f,
+        animationSpec = tween(durationMillis = 110),
+    )
+    val haptic = LocalHapticFeedback.current
+    val buttonColor = if (pressed) CharcoalPressed else Charcoal
 
     Surface(
         modifier = modifier
-            .height(52.dp)
-            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .height(48.dp)
+            .scale(scale)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
@@ -152,57 +189,32 @@ private fun HoldToTalkButton(
                         try {
                             tryAwaitRelease()
                         } finally {
-                            pressed = false
                             onStopListening()
+                            pressed = false
                         }
                     },
                 )
             },
         shape = RoundedCornerShape(999.dp),
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
-        shadowElevation = if (pressed) 2.dp else 10.dp,
+        color = buttonColor,
+        contentColor = Color.White,
+        tonalElevation = 0.dp,
+        shadowElevation = if (pressed) 0.dp else 2.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(999.dp))
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.primary,
-                            MaterialTheme.colorScheme.secondary,
-                            MaterialTheme.colorScheme.tertiary,
-                        ),
-                    ),
-                )
-                .padding(horizontal = 10.dp),
+                .background(buttonColor)
+                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(999.dp))
+                .padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (pressed) "正在聆听" else "按住说话",
-                fontWeight = FontWeight.Bold,
+                text = "按住说话",
+                fontWeight = FontWeight.Medium,
+                color = Color.White,
             )
         }
-    }
-}
-
-@Composable
-private fun PillActionButton(
-    text: String,
-    modifier: Modifier = Modifier,
-    danger: Boolean = false,
-    onClick: () -> Unit,
-) {
-    OutlinedButton(
-        modifier = modifier.height(52.dp),
-        shape = RoundedCornerShape(999.dp),
-        colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-        ),
-        onClick = onClick,
-    ) {
-        Text(text, fontWeight = FontWeight.SemiBold)
     }
 }

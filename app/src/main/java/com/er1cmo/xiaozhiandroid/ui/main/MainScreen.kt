@@ -27,8 +27,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,6 +35,10 @@ import com.er1cmo.xiaozhiandroid.ui.main.components.AssistantFace
 import com.er1cmo.xiaozhiandroid.ui.main.components.BottomControlBar
 import com.er1cmo.xiaozhiandroid.ui.main.components.DebugLogPanel
 import com.er1cmo.xiaozhiandroid.ui.main.components.ToolCallPanel
+import com.er1cmo.xiaozhiandroid.ui.theme.OatBackground
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmBorder
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmText
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmTextSecondary
 
 @Composable
 fun MainScreen(
@@ -68,121 +70,102 @@ fun MainScreen(
         }
     }
 
-    Box(
+    Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        MaterialTheme.colorScheme.background,
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.24f),
-                        MaterialTheme.colorScheme.background,
-                    ),
-                ),
-            ),
-    ) {
-        Scaffold(
+            .background(OatBackground)
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+        containerColor = OatBackground,
+        topBar = {
+            MainTopBar(onOpenSettings = onOpenSettings)
+        },
+        bottomBar = {
+            BottomControlBar(
+                textInput = uiState.textInput,
+                isManualMode = uiState.isManualMode,
+                onTextChanged = viewModel::updateTextInput,
+                onSendText = viewModel::sendText,
+                onStartListening = ::handleStartListening,
+                onStopListening = viewModel::stopManualListening,
+                onAbort = viewModel::abortConversation,
+                onToggleManualMode = viewModel::toggleManualMode,
+            )
+        },
+    ) { innerPadding ->
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing),
-            containerColor = Color.Transparent,
-            topBar = {
-                MainTopBar(
-                    status = uiState.statusLabel,
-                    onOpenSettings = onOpenSettings,
-                )
-            },
-            bottomBar = {
-                BottomControlBar(
-                    textInput = uiState.textInput,
-                    isManualMode = uiState.isManualMode,
-                    onTextChanged = viewModel::updateTextInput,
-                    onSendText = viewModel::sendText,
-                    onStartListening = ::handleStartListening,
-                    onStopListening = viewModel::stopManualListening,
-                    onAbort = viewModel::abortConversation,
-                    onToggleManualMode = viewModel::toggleManualMode,
-                )
-            },
-        ) { innerPadding ->
-            Box(
+                .background(OatBackground)
+                .padding(innerPadding),
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(horizontal = 16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Text(
-                        text = "Android 原生 AI 助手",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                    AssistantFace(
-                        state = uiState.conversationState,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    DebugLogPanel(
-                        uiState = uiState,
-                        onToggleExpanded = viewModel::toggleDebugPanel,
-                        onConnectClick = viewModel::handleConnectionEntry,
-                        onClearLogs = viewModel::clearDebugLogs,
-                    )
-                    Spacer(modifier = Modifier.padding(bottom = 8.dp))
-                }
-
-                ToolCallPanel(
-                    toolCalls = uiState.mcpToolCalls,
-                    lastMcpStatus = uiState.lastMcpStatus,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                AssistantFace(
+                    state = uiState.conversationState,
+                    modifier = Modifier.fillMaxWidth(),
                 )
+                DebugLogPanel(
+                    uiState = uiState,
+                    onToggleExpanded = viewModel::toggleDebugPanel,
+                    onConnectClick = viewModel::handleConnectionEntry,
+                    onClearLogs = viewModel::clearDebugLogs,
+                )
+                Spacer(modifier = Modifier.padding(bottom = 8.dp))
             }
+
+            ToolCallPanel(
+                toolCalls = uiState.mcpToolCalls,
+                lastMcpStatus = uiState.lastMcpStatus,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         }
     }
 }
 
 @Composable
 private fun MainTopBar(
-    status: String,
     onOpenSettings: () -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
+        color = OatBackground,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
-        color = Color.Transparent,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 18.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column {
                 Text(
                     text = "小智语音助手",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Light,
+                    color = WarmText,
                 )
                 Text(
-                    text = "当前状态：$status",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = "Organic AI Companion",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Light,
+                    color = WarmTextSecondary,
                 )
             }
             OutlinedButton(
-                shape = RoundedCornerShape(999.dp),
                 onClick = onOpenSettings,
+                shape = RoundedCornerShape(999.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, WarmBorder),
             ) {
-                Text("设置")
+                Text("设置", color = WarmText)
             }
         }
     }
