@@ -1,10 +1,10 @@
 package com.er1cmo.xiaozhiandroid.domain
 
 /**
- * Main product-facing conversation state for the Android client.
+ * Product-facing conversation state.
  *
- * Phase 10 organic UI separates the disconnected state from the connected
- * standby state: Idle is now product-facing "未连接", Connected is "待命".
+ * Phase 10 distinguishes disconnected from connected-idle: Idle is now shown as
+ * "未连接", while Connected is the calm ready state "待命".
  */
 enum class ConversationState(
     val label: String,
@@ -12,11 +12,11 @@ enum class ConversationState(
 ) {
     Idle(
         label = "未连接",
-        description = "轻触连接入口，唤醒小智",
+        description = "轻触连接入口后开始",
     ),
     Activating(
         label = "激活中",
-        description = "正在完成设备激活",
+        description = "正在执行 OTA / 激活流程",
     ),
     Connecting(
         label = "连接中",
@@ -24,22 +24,22 @@ enum class ConversationState(
     ),
     Connected(
         label = "待命",
-        description = "我在这里，随时可以开始",
+        description = "小智已准备好",
     ),
     Listening(
         label = "聆听中",
-        description = "请说，我在认真听",
+        description = "正在接收你的声音",
     ),
     Thinking(
         label = "思考中",
-        description = "正在整理你的问题",
+        description = "正在组织回复",
     ),
     Speaking(
         label = "说话中",
-        description = "正在回应你",
+        description = "正在播放小智回复",
     ),
     Error(
-        label = "出错了",
-        description = "轻触重连或查看开发者抽屉",
+        label = "错误",
+        description = "发生异常，请查看调试日志",
     ),
 }

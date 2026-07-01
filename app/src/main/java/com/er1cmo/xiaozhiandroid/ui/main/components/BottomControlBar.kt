@@ -1,10 +1,9 @@
 package com.er1cmo.xiaozhiandroid.ui.main.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -33,20 +32,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import com.er1cmo.xiaozhiandroid.ui.theme.Charcoal
+import com.er1cmo.xiaozhiandroid.ui.theme.CharcoalBlack
 import com.er1cmo.xiaozhiandroid.ui.theme.CharcoalPressed
-import com.er1cmo.xiaozhiandroid.ui.theme.OatBackground
-import com.er1cmo.xiaozhiandroid.ui.theme.WarmBorder
-import com.er1cmo.xiaozhiandroid.ui.theme.WarmSurface
-import com.er1cmo.xiaozhiandroid.ui.theme.WarmText
-import com.er1cmo.xiaozhiandroid.ui.theme.WarmTextSecondary
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmCardWhite
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmLine
 
 @Composable
 fun BottomControlBar(
@@ -62,8 +56,8 @@ fun BottomControlBar(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
-        color = WarmSurface,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        color = WarmCardWhite,
         tonalElevation = 0.dp,
         shadowElevation = 4.dp,
     ) {
@@ -79,19 +73,19 @@ fun BottomControlBar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 HoldToTalkButton(
-                    modifier = Modifier.weight(1.35f),
+                    modifier = Modifier.weight(1.2f),
                     onStartListening = onStartListening,
                     onStopListening = onStopListening,
                 )
-                MinimalAssistButton(
+                MinimalOutlineButton(
                     text = "打断",
+                    modifier = Modifier.weight(0.82f),
                     onClick = onAbort,
-                    modifier = Modifier.weight(0.82f),
                 )
-                MinimalAssistButton(
+                MinimalOutlineButton(
                     text = if (isManualMode) "手动" else "自动",
-                    onClick = onToggleManualMode,
                     modifier = Modifier.weight(0.82f),
+                    onClick = onToggleManualMode,
                 )
             }
 
@@ -103,23 +97,15 @@ fun BottomControlBar(
                     modifier = Modifier.weight(1f),
                     value = textInput,
                     onValueChange = onTextChanged,
-                    placeholder = {
-                        Text(
-                            text = "输入文字，或者按住说话",
-                            color = WarmTextSecondary,
-                        )
-                    },
+                    placeholder = { Text("输入文字与小智对话") },
                     singleLine = true,
                     shape = RoundedCornerShape(24.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = OatBackground,
-                        unfocusedContainerColor = OatBackground,
-                        disabledContainerColor = OatBackground,
-                        focusedBorderColor = WarmTextSecondary.copy(alpha = 0.42f),
-                        unfocusedBorderColor = WarmBorder,
-                        focusedTextColor = WarmText,
-                        unfocusedTextColor = WarmText,
-                        cursorColor = WarmText,
+                        focusedBorderColor = CharcoalBlack.copy(alpha = 0.62f),
+                        unfocusedBorderColor = WarmLine,
+                        focusedContainerColor = MaterialTheme.colorScheme.background,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.background,
+                        cursorColor = CharcoalBlack,
                     ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { onSendText() }),
@@ -129,11 +115,9 @@ fun BottomControlBar(
                     onClick = onSendText,
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Charcoal,
-                        contentColor = Color.White,
+                        containerColor = CharcoalBlack,
+                        contentColor = WarmCardWhite,
                     ),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
-                    modifier = Modifier.height(52.dp),
                 ) {
                     Text("发送", fontWeight = FontWeight.Medium)
                 }
@@ -143,22 +127,22 @@ fun BottomControlBar(
 }
 
 @Composable
-private fun MinimalAssistButton(
+private fun MinimalOutlineButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     OutlinedButton(
-        modifier = modifier.height(48.dp),
+        modifier = modifier.height(46.dp),
         onClick = onClick,
-        shape = RoundedCornerShape(999.dp),
-        border = BorderStroke(1.dp, WarmBorder),
+        shape = RoundedCornerShape(28.dp),
+        border = BorderStroke(1.dp, WarmLine),
         colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = WarmSurface,
-            contentColor = WarmText,
+            containerColor = WarmCardWhite,
+            contentColor = CharcoalBlack,
         ),
     ) {
-        Text(text, fontWeight = FontWeight.Light)
+        Text(text, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -168,53 +152,50 @@ private fun HoldToTalkButton(
     onStopListening: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val haptic = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.975f else 1f,
-        animationSpec = tween(durationMillis = 110),
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = tween(durationMillis = 140),
+        label = "hold_to_talk_scale",
     )
-    val haptic = LocalHapticFeedback.current
-    val buttonColor = if (pressed) CharcoalPressed else Charcoal
+    val containerColor by animateColorAsState(
+        targetValue = if (pressed) CharcoalPressed else CharcoalBlack,
+        animationSpec = tween(durationMillis = 140),
+        label = "hold_to_talk_color",
+    )
 
     Surface(
         modifier = modifier
-            .height(48.dp)
+            .height(46.dp)
             .scale(scale)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
                         pressed = true
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                         onStartListening()
                         try {
                             tryAwaitRelease()
                         } finally {
-                            onStopListening()
                             pressed = false
+                            onStopListening()
                         }
                     },
                 )
             },
-        shape = RoundedCornerShape(999.dp),
-        color = buttonColor,
-        contentColor = Color.White,
-        tonalElevation = 0.dp,
-        shadowElevation = if (pressed) 0.dp else 2.dp,
+        shape = RoundedCornerShape(28.dp),
+        color = containerColor,
+        contentColor = WarmCardWhite,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(buttonColor)
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(999.dp))
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = 10.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "按住说话",
-                fontWeight = FontWeight.Medium,
-                color = Color.White,
-            )
+            Text("按住说话", fontWeight = FontWeight.Medium)
         }
     }
 }

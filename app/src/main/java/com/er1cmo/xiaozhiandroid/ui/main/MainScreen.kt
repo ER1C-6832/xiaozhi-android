@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,10 +33,7 @@ import com.er1cmo.xiaozhiandroid.ui.main.components.AssistantFace
 import com.er1cmo.xiaozhiandroid.ui.main.components.BottomControlBar
 import com.er1cmo.xiaozhiandroid.ui.main.components.DebugLogPanel
 import com.er1cmo.xiaozhiandroid.ui.main.components.ToolCallPanel
-import com.er1cmo.xiaozhiandroid.ui.theme.OatBackground
-import com.er1cmo.xiaozhiandroid.ui.theme.WarmBorder
-import com.er1cmo.xiaozhiandroid.ui.theme.WarmText
-import com.er1cmo.xiaozhiandroid.ui.theme.WarmTextSecondary
+import com.er1cmo.xiaozhiandroid.ui.theme.WarmCardWhite
 
 @Composable
 fun MainScreen(
@@ -73,9 +68,8 @@ fun MainScreen(
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .background(OatBackground)
             .windowInsetsPadding(WindowInsets.safeDrawing),
-        containerColor = OatBackground,
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             MainTopBar(onOpenSettings = onOpenSettings)
         },
@@ -95,7 +89,6 @@ fun MainScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(OatBackground)
                 .padding(innerPadding),
         ) {
             Column(
@@ -103,7 +96,7 @@ fun MainScreen(
                     .fillMaxSize()
                     .padding(horizontal = 16.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 AssistantFace(
                     state = uiState.conversationState,
@@ -135,14 +128,14 @@ private fun MainTopBar(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = OatBackground,
+        color = WarmCardWhite,
         tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
+        shadowElevation = 2.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -150,22 +143,17 @@ private fun MainTopBar(
                 Text(
                     text = "小智语音助手",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Light,
-                    color = WarmText,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    text = "Organic AI Companion",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Light,
-                    color = WarmTextSecondary,
+                    text = "Aurora Fluid Assistant",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            OutlinedButton(
-                onClick = onOpenSettings,
-                shape = RoundedCornerShape(999.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, WarmBorder),
-            ) {
-                Text("设置", color = WarmText)
+            OutlinedButton(onClick = onOpenSettings) {
+                Text("参数设置")
             }
         }
     }
