@@ -353,7 +353,7 @@ class MainViewModel(
             conversationState = transitionTo(ConversationState.Listening, if (autoStopEnabled) "auto_stop_listen_start" else "manual_listen_start"),
             audioUplinkStatus = "正在启动录音",
             vadStatus = if (autoStopEnabled) "VAD 等待起声" else "MANUAL：松开后发送 stop",
-            vadSummary = if (autoStopEnabled) "AUTO_STOP 已启用：说完停顿约 900ms 后自动 stop" else VoiceInteractionMode.Manual.description,
+            vadSummary = if (autoStopEnabled) "AUTO_STOP 已启用：检测到短暂停顿后自动 stop" else VoiceInteractionMode.Manual.description,
         )
         appendLocalLog(
             if (autoStopEnabled) {

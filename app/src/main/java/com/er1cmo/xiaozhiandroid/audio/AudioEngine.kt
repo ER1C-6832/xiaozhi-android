@@ -28,15 +28,15 @@ class AudioEngine(
 
     data class VadConfig(
         val enabled: Boolean = false,
-        val speechPeakThreshold: Int = 1_200,
-        val speechRmsThreshold: Int = 260,
-        val silencePeakThreshold: Int = 700,
-        val silenceRmsThreshold: Int = 180,
-        val minSpeechFrames: Int = 5,
-        val trailingSilenceMs: Long = 900L,
-        val warmupMs: Long = 260L,
-        val minRecordingMs: Long = 700L,
-        val maxRecordingMs: Long = 18_000L,
+        val speechPeakThreshold: Int = 900,
+        val speechRmsThreshold: Int = 180,
+        val silencePeakThreshold: Int = 1_050,
+        val silenceRmsThreshold: Int = 260,
+        val minSpeechFrames: Int = 3,
+        val trailingSilenceMs: Long = 560L,
+        val warmupMs: Long = 160L,
+        val minRecordingMs: Long = 520L,
+        val maxRecordingMs: Long = 16_000L,
     ) {
         companion object {
             val Disabled = VadConfig(enabled = false)
@@ -103,6 +103,8 @@ class AudioEngine(
             var vadSpeechFrames = 0
             var vadTrailingSilentFrames = 0
             var lastVadStatus = ""
+            var noisePeakEma = 0f
+            var noiseRmsEma = 0f
 
             val warmupFrames = vadConfig.warmupMs.toFrames()
             val minRecordingFrames = vadConfig.minRecordingMs.toFrames()
@@ -137,22 +139,55 @@ class AudioEngine(
 
             fun inspectVad(frameLevel: FrameLevel) {
                 if (!vadConfig.enabled || vadTriggered) return
-                if (pcmFrames < warmupFrames) {
-                    updateVadStatus("VAD 预热中")
-                    return
-                }
 
                 val frameRms = if (frameLevel.sampleCount <= 0) {
                     0
                 } else {
                     sqrt(frameLevel.squareSum / frameLevel.sampleCount).toInt()
                 }
-                val isSpeech = frameLevel.peakAbs >= vadConfig.speechPeakThreshold ||
-                    frameRms >= vadConfig.speechRmsThreshold
-                val isSilence = frameLevel.peakAbs <= vadConfig.silencePeakThreshold &&
-                    frameRms <= vadConfig.silenceRmsThreshold
+
+                fun updateNoiseFloor() {
+                    if (noisePeakEma <= 0f) {
+                        noisePeakEma = frameLevel.peakAbs.toFloat()
+                        noiseRmsEma = frameRms.toFloat()
+                    } else {
+                        noisePeakEma = noisePeakEma * NOISE_EMA_DECAY + frameLevel.peakAbs * (1f - NOISE_EMA_DECAY)
+                        noiseRmsEma = noiseRmsEma * NOISE_EMA_DECAY + frameRms * (1f - NOISE_EMA_DECAY)
+                    }
+                }
+
+                if (pcmFrames < warmupFrames) {
+                    updateNoiseFloor()
+                    updateVadStatus("VAD 预热中")
+                    return
+                }
+
+                val dynamicSpeechPeak = maxOf(
+                    vadConfig.speechPeakThreshold,
+                    (noisePeakEma * 2.8f).toInt() + 320,
+                )
+                val dynamicSpeechRms = maxOf(
+                    vadConfig.speechRmsThreshold,
+                    (noiseRmsEma * 2.3f).toInt() + 70,
+                )
+                val dynamicSilencePeak = maxOf(
+                    vadConfig.silencePeakThreshold,
+                    (noisePeakEma * 2.15f).toInt() + 260,
+                )
+                val dynamicSilenceRms = maxOf(
+                    vadConfig.silenceRmsThreshold,
+                    (noiseRmsEma * 1.9f).toInt() + 60,
+                )
+
+                val isSpeech = frameLevel.peakAbs >= dynamicSpeechPeak ||
+                    frameRms >= dynamicSpeechRms
+                val isQuiet = frameLevel.peakAbs <= dynamicSilencePeak &&
+                    frameRms <= dynamicSilenceRms
 
                 if (!vadSawSpeech) {
+                    if (!isSpeech) {
+                        updateNoiseFloor()
+                    }
                     if (isSpeech) {
                         vadSpeechFrames += 1
                     } else {
@@ -161,23 +196,25 @@ class AudioEngine(
                     if (vadSpeechFrames >= vadConfig.minSpeechFrames) {
                         vadSawSpeech = true
                         vadTrailingSilentFrames = 0
-                        updateVadStatus("VAD 已检测到语音，等待停顿")
+                        updateVadStatus("VAD 已检测到语音，等待短暂停顿")
                     } else {
-                        updateVadStatus("VAD 等待起声")
+                        updateVadStatus("VAD 等待起声 peak=${frameLevel.peakAbs}/$dynamicSpeechPeak rms=$frameRms/$dynamicSpeechRms")
                     }
                 } else {
-                    if (isSilence) {
-                        vadTrailingSilentFrames += 1
-                    } else {
+                    if (isSpeech) {
                         vadTrailingSilentFrames = 0
+                    } else {
+                        // py-xiaozhi 的交互更接近连续流：只要不是明确语音，就应该快速进入
+                        // 尾静音累计；否则背景噪声会让 AUTO_STOP 延迟好几秒。
+                        vadTrailingSilentFrames += if (isQuiet) 1 else 1
                     }
-                    if (vadTrailingSilentFrames > 0 && vadTrailingSilentFrames % 10 == 0) {
+                    if (vadTrailingSilentFrames > 0 && vadTrailingSilentFrames % 5 == 0) {
                         updateVadStatus("VAD 尾静音 ${vadTrailingSilentFrames * AudioConstants.FRAME_DURATION_MS}/${vadConfig.trailingSilenceMs}ms")
                     }
                     if (vadTrailingSilentFrames >= trailingSilenceFrames && pcmFrames >= minRecordingFrames) {
                         vadTriggered = true
                         recording = false
-                        updateVadStatus("VAD 已检测到停顿，自动停止")
+                        updateVadStatus("VAD 已检测到短暂停顿，自动停止")
                     }
                 }
 
@@ -512,5 +549,6 @@ class AudioEngine(
         const val PLAYBACK_DRAIN_GRACE_MS = 180L
         const val RECORDING_STOP_JOIN_TIMEOUT_MS = 1_500L
         const val SILENCE_PEAK_THRESHOLD = 500
+        const val NOISE_EMA_DECAY = 0.93f
     }
 }
