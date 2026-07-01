@@ -4,6 +4,9 @@ data class ConversationUiState(
     val conversationState: ConversationState = ConversationState.Idle,
     val textInput: String = "",
     val isManualMode: Boolean = true,
+    val voiceMode: VoiceInteractionMode = VoiceInteractionMode.Manual,
+    val vadStatus: String = "MANUAL：按住说话",
+    val vadSummary: String = "轻量能量阈值 VAD 已准备，AUTO_STOP 模式下启用",
     val isDebugExpanded: Boolean = true,
     val developerModeEnabled: Boolean = true,
     val clientId: String = "未生成",
@@ -40,6 +43,28 @@ data class ConversationUiState(
 
     val statusDescription: String
         get() = conversationState.description
+}
+
+enum class VoiceInteractionMode(
+    val wireName: String,
+    val label: String,
+    val description: String,
+) {
+    Manual(
+        wireName = "MANUAL",
+        label = "手动",
+        description = "按住说话，松手后发送 stop。",
+    ),
+    AutoStop(
+        wireName = "AUTO_STOP",
+        label = "自然对话",
+        description = "点一下开始，检测到停顿后自动发送 stop。",
+    ),
+    Realtime(
+        wireName = "REALTIME",
+        label = "实时",
+        description = "Phase 11C 全双工模式预留。",
+    ),
 }
 
 data class McpToolListItemUiState(

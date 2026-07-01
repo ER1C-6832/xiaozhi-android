@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -36,7 +37,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.er1cmo.xiaozhiandroid.domain.VoiceInteractionMode
 import com.er1cmo.xiaozhiandroid.ui.theme.CharcoalBlack
 import com.er1cmo.xiaozhiandroid.ui.theme.CharcoalPressed
 import com.er1cmo.xiaozhiandroid.ui.theme.WarmCardWhite
@@ -46,6 +49,9 @@ import com.er1cmo.xiaozhiandroid.ui.theme.WarmLine
 fun BottomControlBar(
     textInput: String,
     isManualMode: Boolean,
+    voiceMode: VoiceInteractionMode,
+    isListening: Boolean,
+    vadStatus: String,
     onTextChanged: (String) -> Unit,
     onSendText: () -> Unit,
     onStartListening: () -> Unit,
@@ -72,22 +78,36 @@ fun BottomControlBar(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                HoldToTalkButton(
-                    modifier = Modifier.weight(1.2f),
+                VoiceActionButton(
+                    mode = voiceMode,
+                    isListening = isListening,
+                    modifier = Modifier.weight(1.35f),
                     onStartListening = onStartListening,
                     onStopListening = onStopListening,
                 )
                 MinimalOutlineButton(
                     text = "打断",
-                    modifier = Modifier.weight(0.82f),
+                    modifier = Modifier.weight(0.74f),
                     onClick = onAbort,
                 )
                 MinimalOutlineButton(
-                    text = if (isManualMode) "手动" else "自动",
-                    modifier = Modifier.weight(0.82f),
+                    text = if (isManualMode) "MANUAL" else "AUTO",
+                    modifier = Modifier.weight(0.86f),
                     onClick = onToggleManualMode,
                 )
             }
+
+            Text(
+                text = when (voiceMode) {
+                    VoiceInteractionMode.Manual -> "MANUAL：按住说话，松开后发送"
+                    VoiceInteractionMode.AutoStop -> vadStatus
+                    VoiceInteractionMode.Realtime -> "REALTIME：Phase 11C 全双工预留"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -142,12 +162,14 @@ private fun MinimalOutlineButton(
             contentColor = CharcoalBlack,
         ),
     ) {
-        Text(text, fontWeight = FontWeight.Medium)
+        Text(text, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 
 @Composable
-private fun HoldToTalkButton(
+private fun VoiceActionButton(
+    mode: VoiceInteractionMode,
+    isListening: Boolean,
     onStartListening: () -> Unit,
     onStopListening: () -> Unit,
     modifier: Modifier = Modifier,
@@ -155,35 +177,56 @@ private fun HoldToTalkButton(
     val haptic = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
+        targetValue = if (pressed || isListening) 0.97f else 1f,
         animationSpec = tween(durationMillis = 140),
-        label = "hold_to_talk_scale",
+        label = "voice_action_scale",
     )
     val containerColor by animateColorAsState(
-        targetValue = if (pressed) CharcoalPressed else CharcoalBlack,
+        targetValue = if (pressed || isListening) CharcoalPressed else CharcoalBlack,
         animationSpec = tween(durationMillis = 140),
-        label = "hold_to_talk_color",
+        label = "voice_action_color",
     )
 
+    val label = when {
+        mode == VoiceInteractionMode.Manual -> "按住说话"
+        isListening -> "停止收音"
+        mode == VoiceInteractionMode.AutoStop -> "自然对话"
+        else -> "实时预留"
+    }
+
+    val baseModifier = modifier
+        .height(46.dp)
+        .scale(scale)
+
+    val gestureModifier = if (mode == VoiceInteractionMode.Manual) {
+        baseModifier.pointerInput(Unit) {
+            detectTapGestures(
+                onPress = {
+                    pressed = true
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    onStartListening()
+                    try {
+                        tryAwaitRelease()
+                    } finally {
+                        pressed = false
+                        onStopListening()
+                    }
+                },
+            )
+        }
+    } else {
+        baseModifier.clickable {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            if (isListening) {
+                onStopListening()
+            } else {
+                onStartListening()
+            }
+        }
+    }
+
     Surface(
-        modifier = modifier
-            .height(46.dp)
-            .scale(scale)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        pressed = true
-                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                        onStartListening()
-                        try {
-                            tryAwaitRelease()
-                        } finally {
-                            pressed = false
-                            onStopListening()
-                        }
-                    },
-                )
-            },
+        modifier = gestureModifier,
         shape = RoundedCornerShape(28.dp),
         color = containerColor,
         contentColor = WarmCardWhite,
@@ -195,7 +238,7 @@ private fun HoldToTalkButton(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("按住说话", fontWeight = FontWeight.Medium)
+            Text(label, fontWeight = FontWeight.Medium, maxLines = 1)
         }
     }
 }

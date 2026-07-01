@@ -1,11 +1,13 @@
 package com.er1cmo.xiaozhiandroid.ui.main
 
+import com.er1cmo.xiaozhiandroid.audio.AudioEngine
+import com.er1cmo.xiaozhiandroid.core.AppController
 import com.er1cmo.xiaozhiandroid.data.config.AppConfig
 import com.er1cmo.xiaozhiandroid.data.ota.ActivationState
 import com.er1cmo.xiaozhiandroid.domain.ConversationController
 import com.er1cmo.xiaozhiandroid.domain.ConversationState
 import com.er1cmo.xiaozhiandroid.domain.ConversationUiState
-import com.er1cmo.xiaozhiandroid.core.AppController
+import com.er1cmo.xiaozhiandroid.domain.VoiceInteractionMode
 import com.er1cmo.xiaozhiandroid.protocol.ProtocolEvent
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -75,9 +77,22 @@ class MainViewModel(
     }
 
     fun toggleManualMode() {
-        val nextMode = !uiState.isManualMode
-        uiState = uiState.copy(isManualMode = nextMode)
-        appendLocalLog(if (nextMode) "切换为手动对话模式" else "切换为自动对话模式（占位）")
+        val nextMode = if (uiState.voiceMode == VoiceInteractionMode.Manual) {
+            VoiceInteractionMode.AutoStop
+        } else {
+            VoiceInteractionMode.Manual
+        }
+        uiState = uiState.copy(
+            voiceMode = nextMode,
+            isManualMode = nextMode == VoiceInteractionMode.Manual,
+            vadStatus = if (nextMode == VoiceInteractionMode.AutoStop) {
+                "AUTO_STOP：点按开始，说完停顿后自动发送"
+            } else {
+                "MANUAL：按住说话"
+            },
+            vadSummary = nextMode.description,
+        )
+        appendLocalLog("切换语音模式：${nextMode.wireName}，${nextMode.description}")
     }
 
     fun toggleDebugPanel() {
@@ -93,12 +108,12 @@ class MainViewModel(
 
     fun requestMicrophonePermission() {
         uiState = uiState.copy(audioUplinkStatus = "等待麦克风权限")
-        appendLocalLog("需要麦克风权限：请允许 RECORD_AUDIO 后再次按住说话")
+        appendLocalLog("需要麦克风权限：请允许 RECORD_AUDIO 后再次开始说话")
     }
 
     fun onMicrophonePermissionGranted() {
-        uiState = uiState.copy(audioUplinkStatus = "权限已允许，等待按住说话")
-        appendLocalLog("麦克风权限已允许，请再次按住说话开始上传语音")
+        uiState = uiState.copy(audioUplinkStatus = "权限已允许，等待开始说话")
+        appendLocalLog("麦克风权限已允许，请再次开始语音输入")
     }
 
     fun onMicrophonePermissionDenied() {
@@ -267,6 +282,7 @@ class MainViewModel(
             autoReconnectStatus = "已暂停",
             sessionId = "暂无",
             audioUplinkStatus = if (audioEngine.isRecording()) "停止中" else uiState.audioUplinkStatus,
+            vadStatus = "已关闭连接",
         )
         appendLocalLog("已手动关闭连接并暂停自动重连")
     }
@@ -291,7 +307,7 @@ class MainViewModel(
             return
         }
 
-        if (!ensureReadyOrReconnect(action = "按住后说话", pendingText = null)) {
+        if (!ensureReadyOrReconnect(action = "开始语音", pendingText = null)) {
             uiState = uiState.copy(audioUplinkStatus = "等待连接恢复后再录音")
             return
         }
@@ -319,6 +335,8 @@ class MainViewModel(
             appendLocalLog(if (aborted) "开始录音前已打断当前 TTS 播放" else "开始录音前停止了本地 TTS 播放")
         }
 
+        val mode = uiState.voiceMode
+        val autoStopEnabled = mode == VoiceInteractionMode.AutoStop
         val startSent = xiaozhiWebSocketClient.sendStartManualListening()
         if (!startSent) {
             uiState = uiState.copy(
@@ -332,15 +350,26 @@ class MainViewModel(
         }
 
         uiState = uiState.copy(
-            conversationState = transitionTo(ConversationState.Listening, "manual_listen_start"),
+            conversationState = transitionTo(ConversationState.Listening, if (autoStopEnabled) "auto_stop_listen_start" else "manual_listen_start"),
             audioUplinkStatus = "正在启动录音",
+            vadStatus = if (autoStopEnabled) "VAD 等待起声" else "MANUAL：松开后发送 stop",
+            vadSummary = if (autoStopEnabled) "AUTO_STOP 已启用：说完停顿约 900ms 后自动 stop" else VoiceInteractionMode.Manual.description,
         )
-        appendLocalLog("已发送 listen/start/manual，开始麦克风录音与 Opus 上行")
+        appendLocalLog(
+            if (autoStopEnabled) {
+                "已发送 listen/start/manual，AUTO_STOP 本地能量 VAD 已启用，开始麦克风录音与 Opus 上行"
+            } else {
+                "已发送 listen/start/manual，开始麦克风录音与 Opus 上行"
+            },
+        )
 
         audioEngine.startRecording(
             onEncodedFrame = { opusFrame -> xiaozhiWebSocketClient.sendAudioFrame(opusFrame) },
             onLog = ::appendLocalLogFromAnyThread,
             onStatusChanged = ::updateAudioStatusFromAnyThread,
+            vadConfig = if (autoStopEnabled) AudioEngine.VadConfig.autoStop() else AudioEngine.VadConfig.Disabled,
+            onVadStatusChanged = ::updateVadStatusFromAnyThread,
+            onVadAutoStop = ::handleVadAutoStopFromAnyThread,
         )
     }
 
@@ -384,6 +413,8 @@ class MainViewModel(
                     } else {
                         uiState.audioUplinkStatus
                     },
+                    vadStatus = "已停止，等待服务端响应",
+                    vadSummary = "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
                 )
 
                 if (shouldSendStop) {
@@ -404,6 +435,7 @@ class MainViewModel(
                             uiState = uiState.copy(
                                 conversationState = transitionTo(if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle, "voice_no_useful_audio"),
                                 lastError = "本次按住时间过短或未采集到有效语音帧",
+                                vadStatus = if (uiState.voiceMode == VoiceInteractionMode.AutoStop) "AUTO_STOP：等待下一次点按" else "MANUAL：按住说话",
                             )
                             appendLocalLog(
                                 "已发送 listen/stop，但本次有效 Opus 音频帧不足" +
@@ -442,6 +474,7 @@ class MainViewModel(
         uiState = uiState.copy(
             conversationState = transitionTo(if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle, "abort"),
             audioUplinkStatus = if (wasRecording) "已停止" else uiState.audioUplinkStatus,
+            vadStatus = if (uiState.voiceMode == VoiceInteractionMode.AutoStop) "AUTO_STOP：等待下一次点按" else "MANUAL：按住说话",
         )
         appendLocalLog(if (sent) "已发送 abort/user_interruption" else "打断对话：本地已停止，WebSocket 未连接或 session_id 缺失")
     }
@@ -465,6 +498,23 @@ class MainViewModel(
         repeatedLogCount = 0
         val nextLogs = (uiState.debugLogs + "${timestamp()} $message").takeLast(MAX_LOG_LINES)
         uiState = uiState.copy(debugLogs = nextLogs)
+    }
+
+    private fun handleVadAutoStopFromAnyThread(stats: AudioEngine.RecordingStats) {
+        appScope.launch(Dispatchers.Main.immediate) {
+            if (uiState.voiceMode != VoiceInteractionMode.AutoStop) return@launch
+            if (uiState.conversationState != ConversationState.Listening) return@launch
+            if (isStoppingListening) return@launch
+            uiState = uiState.copy(
+                vadStatus = "VAD 检测到停顿，自动 stop",
+                vadSummary = "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
+            )
+            appendLocalLog(
+                "VAD 自动停止触发：PCM ${stats.pcmFrames} 帧，Opus ${stats.opusPackets} 帧，" +
+                    "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
+            )
+            stopListening()
+        }
     }
 
     private fun ensureReadyOrReconnect(
@@ -959,6 +1009,7 @@ class MainViewModel(
             autoReconnectStatus = autoReconnectStatus,
             sessionId = "暂无",
             audioUplinkStatus = if (audioEngine.isRecording()) "停止中" else uiState.audioUplinkStatus,
+            vadStatus = "运行时已重置",
         )
         appendLocalLog("$action：已关闭当前 WebSocket、停止录音/播放并清理运行时 session")
     }
@@ -978,6 +1029,12 @@ class MainViewModel(
     private fun updateAudioPlaybackStatusFromAnyThread(status: String) {
         appScope.launch(Dispatchers.Main.immediate) {
             uiState = uiState.copy(audioPlaybackStatus = status)
+        }
+    }
+
+    private fun updateVadStatusFromAnyThread(status: String) {
+        appScope.launch(Dispatchers.Main.immediate) {
+            uiState = uiState.copy(vadStatus = status)
         }
     }
 
@@ -1014,7 +1071,6 @@ class MainViewModel(
             lastServerJson = config.lastJson.ifBlank { uiState.lastServerJson },
         )
     }
-
 
     private fun transitionTo(
         next: ConversationState,

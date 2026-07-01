@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.er1cmo.xiaozhiandroid.domain.ConversationState
 import com.er1cmo.xiaozhiandroid.ui.main.components.AssistantFace
 import com.er1cmo.xiaozhiandroid.ui.main.components.BottomControlBar
 import com.er1cmo.xiaozhiandroid.ui.main.components.DebugLogPanel
@@ -77,6 +78,9 @@ fun MainScreen(
             BottomControlBar(
                 textInput = uiState.textInput,
                 isManualMode = uiState.isManualMode,
+                voiceMode = uiState.voiceMode,
+                isListening = uiState.conversationState == ConversationState.Listening,
+                vadStatus = uiState.vadStatus,
                 onTextChanged = viewModel::updateTextInput,
                 onSendText = viewModel::sendText,
                 onStartListening = ::handleStartListening,
@@ -147,7 +151,7 @@ private fun MainTopBar(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    text = "Aurora Fluid Assistant",
+                    text = "Phase 11A · AUTO_STOP VAD",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -26,6 +26,24 @@ class AudioEngine(
             get() = if (pcmFrames <= 0) 0 else (silentFrames * 100 / pcmFrames)
     }
 
+    data class VadConfig(
+        val enabled: Boolean = false,
+        val speechPeakThreshold: Int = 1_200,
+        val speechRmsThreshold: Int = 260,
+        val silencePeakThreshold: Int = 700,
+        val silenceRmsThreshold: Int = 180,
+        val minSpeechFrames: Int = 5,
+        val trailingSilenceMs: Long = 900L,
+        val warmupMs: Long = 260L,
+        val minRecordingMs: Long = 700L,
+        val maxRecordingMs: Long = 18_000L,
+    ) {
+        companion object {
+            val Disabled = VadConfig(enabled = false)
+            fun autoStop(): VadConfig = VadConfig(enabled = true)
+        }
+    }
+
     @Volatile
     private var recording = false
 
@@ -54,6 +72,9 @@ class AudioEngine(
         onEncodedFrame: (ByteArray) -> Boolean,
         onLog: (String) -> Unit,
         onStatusChanged: (String) -> Unit,
+        vadConfig: VadConfig = VadConfig.Disabled,
+        onVadStatusChanged: ((String) -> Unit)? = null,
+        onVadAutoStop: ((RecordingStats) -> Unit)? = null,
     ) {
         if (recording) {
             onLog("音频上行已在运行，忽略重复启动")
@@ -63,6 +84,9 @@ class AudioEngine(
         recording = true
         currentRecordingStats = RecordingStats()
         onStatusChanged("录音启动中")
+        if (vadConfig.enabled) {
+            onVadStatusChanged?.invoke("VAD 等待起声")
+        }
         recordingJob = appScope.launch(Dispatchers.IO) {
             val recorder = AudioRecorder()
             var audioRecord: AudioRecord? = null
@@ -74,6 +98,16 @@ class AudioEngine(
             var silentFrames = 0
             var squareSum = 0.0
             var sampleCount = 0L
+            var vadTriggered = false
+            var vadSawSpeech = false
+            var vadSpeechFrames = 0
+            var vadTrailingSilentFrames = 0
+            var lastVadStatus = ""
+
+            val warmupFrames = vadConfig.warmupMs.toFrames()
+            val minRecordingFrames = vadConfig.minRecordingMs.toFrames()
+            val trailingSilenceFrames = vadConfig.trailingSilenceMs.toFrames()
+            val maxRecordingFrames = vadConfig.maxRecordingMs.toFrames()
 
             fun updateStats() {
                 val rms = if (sampleCount <= 0) {
@@ -89,6 +123,69 @@ class AudioEngine(
                     rms = rms,
                     silentFrames = silentFrames,
                 )
+            }
+
+            fun updateVadStatus(status: String) {
+                if (status == lastVadStatus) return
+                lastVadStatus = status
+                onVadStatusChanged?.let { callback ->
+                    appScope.launch(Dispatchers.Main.immediate) {
+                        callback(status)
+                    }
+                }
+            }
+
+            fun inspectVad(frameLevel: FrameLevel) {
+                if (!vadConfig.enabled || vadTriggered) return
+                if (pcmFrames < warmupFrames) {
+                    updateVadStatus("VAD 预热中")
+                    return
+                }
+
+                val frameRms = if (frameLevel.sampleCount <= 0) {
+                    0
+                } else {
+                    sqrt(frameLevel.squareSum / frameLevel.sampleCount).toInt()
+                }
+                val isSpeech = frameLevel.peakAbs >= vadConfig.speechPeakThreshold ||
+                    frameRms >= vadConfig.speechRmsThreshold
+                val isSilence = frameLevel.peakAbs <= vadConfig.silencePeakThreshold &&
+                    frameRms <= vadConfig.silenceRmsThreshold
+
+                if (!vadSawSpeech) {
+                    if (isSpeech) {
+                        vadSpeechFrames += 1
+                    } else {
+                        vadSpeechFrames = 0
+                    }
+                    if (vadSpeechFrames >= vadConfig.minSpeechFrames) {
+                        vadSawSpeech = true
+                        vadTrailingSilentFrames = 0
+                        updateVadStatus("VAD 已检测到语音，等待停顿")
+                    } else {
+                        updateVadStatus("VAD 等待起声")
+                    }
+                } else {
+                    if (isSilence) {
+                        vadTrailingSilentFrames += 1
+                    } else {
+                        vadTrailingSilentFrames = 0
+                    }
+                    if (vadTrailingSilentFrames > 0 && vadTrailingSilentFrames % 10 == 0) {
+                        updateVadStatus("VAD 尾静音 ${vadTrailingSilentFrames * AudioConstants.FRAME_DURATION_MS}/${vadConfig.trailingSilenceMs}ms")
+                    }
+                    if (vadTrailingSilentFrames >= trailingSilenceFrames && pcmFrames >= minRecordingFrames) {
+                        vadTriggered = true
+                        recording = false
+                        updateVadStatus("VAD 已检测到停顿，自动停止")
+                    }
+                }
+
+                if (!vadTriggered && pcmFrames >= maxRecordingFrames) {
+                    vadTriggered = true
+                    recording = false
+                    updateVadStatus("VAD 达到最长录音时长，自动停止")
+                }
             }
 
             try {
@@ -108,9 +205,10 @@ class AudioEngine(
                 audioRecord.startRecording()
                 onLog(
                     "音频上行启动：${AudioConstants.INPUT_SAMPLE_RATE}Hz/mono/" +
-                        "${AudioConstants.FRAME_DURATION_MS}ms，PCM ${AudioConstants.PCM_FRAME_BYTES}B/帧",
+                        "${AudioConstants.FRAME_DURATION_MS}ms，PCM ${AudioConstants.PCM_FRAME_BYTES}B/帧" +
+                        if (vadConfig.enabled) "，AUTO_STOP VAD 已启用" else "",
                 )
-                onStatusChanged("录音中")
+                onStatusChanged(if (vadConfig.enabled) "录音中，VAD 自动停顿检测" else "录音中")
 
                 val buffer = ByteArray(AudioConstants.PCM_FRAME_BYTES)
                 while (recording) {
@@ -129,6 +227,7 @@ class AudioEngine(
                     val presentationTimeUs = pcmFrames * AudioConstants.FRAME_DURATION_MS * 1_000L
                     pcmFrames += 1
                     updateStats()
+                    inspectVad(frameLevel)
 
                     val packets = encoder.encode(PcmFrame(pcm, presentationTimeUs))
                     for (packet in packets) {
@@ -166,6 +265,11 @@ class AudioEngine(
                     "音频上行停止：PCM ${stats.pcmFrames} 帧，Opus ${stats.opusPackets} 帧，" +
                         "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
                 )
+                if (vadTriggered && onVadAutoStop != null) {
+                    appScope.launch(Dispatchers.Main.immediate) {
+                        onVadAutoStop(stats)
+                    }
+                }
             }
         }
     }
@@ -362,6 +466,10 @@ class AudioEngine(
         deadlineAt: Long,
     ): Boolean {
         return opusFrames >= PREBUFFER_TARGET_FRAMES || System.currentTimeMillis() >= deadlineAt
+    }
+
+    private fun Long.toFrames(): Int {
+        return ((this + AudioConstants.FRAME_DURATION_MS - 1) / AudioConstants.FRAME_DURATION_MS).toInt().coerceAtLeast(1)
     }
 
     private fun inspectPcm16(bytes: ByteArray): FrameLevel {
