@@ -91,7 +91,7 @@ fun BottomControlBar(
                     onClick = onAbort,
                 )
                 MinimalOutlineButton(
-                    text = if (isManualMode) "MANUAL" else "AUTO",
+                    text = voiceMode.wireName,
                     modifier = Modifier.weight(0.86f),
                     onClick = onToggleManualMode,
                 )
@@ -101,7 +101,7 @@ fun BottomControlBar(
                 text = when (voiceMode) {
                     VoiceInteractionMode.Manual -> "MANUAL：按住说话，松开后发送"
                     VoiceInteractionMode.AutoStop -> vadStatus
-                    VoiceInteractionMode.Realtime -> "REALTIME：Phase 11C 全双工预留"
+                    VoiceInteractionMode.Realtime -> vadStatus
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -191,7 +191,8 @@ private fun VoiceActionButton(
         mode == VoiceInteractionMode.Manual -> "按住说话"
         isListening -> "停止收音"
         mode == VoiceInteractionMode.AutoStop -> "自然对话"
-        else -> "实时预留"
+        mode == VoiceInteractionMode.Realtime -> "全双工"
+        else -> "开始"
     }
 
     val baseModifier = modifier

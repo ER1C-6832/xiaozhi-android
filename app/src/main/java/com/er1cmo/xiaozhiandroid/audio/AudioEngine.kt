@@ -37,10 +37,21 @@ class AudioEngine(
         val warmupMs: Long = 160L,
         val minRecordingMs: Long = 520L,
         val maxRecordingMs: Long = 16_000L,
+        val autoStopOnSilence: Boolean = true,
+        val rearmAfterSilenceMs: Long = 900L,
     ) {
         companion object {
             val Disabled = VadConfig(enabled = false)
             fun autoStop(): VadConfig = VadConfig(enabled = true)
+            fun realtime(): VadConfig = VadConfig(
+                enabled = true,
+                trailingSilenceMs = 560L,
+                warmupMs = 120L,
+                minRecordingMs = 0L,
+                maxRecordingMs = 24L * 60L * 60L * 1_000L,
+                autoStopOnSilence = false,
+                rearmAfterSilenceMs = 760L,
+            )
         }
     }
 
@@ -90,6 +101,7 @@ class AudioEngine(
         vadConfig: VadConfig = VadConfig.Disabled,
         onVadStatusChanged: ((String) -> Unit)? = null,
         onVadAutoStop: ((RecordingStats) -> Unit)? = null,
+        onVadSpeechDetected: ((RecordingStats) -> Unit)? = null,
         audioProcessingConfig: AudioProcessingConfig = AudioProcessingConfig.Default,
     ) {
         if (recording) {
@@ -119,6 +131,7 @@ class AudioEngine(
             var vadSawSpeech = false
             var vadSpeechFrames = 0
             var vadTrailingSilentFrames = 0
+            var vadSpeechNotificationFired = false
             var lastVadStatus = ""
             var noisePeakEma = 0f
             var noiseRmsEma = 0f
@@ -126,6 +139,7 @@ class AudioEngine(
             val warmupFrames = vadConfig.warmupMs.toFrames()
             val minRecordingFrames = vadConfig.minRecordingMs.toFrames()
             val trailingSilenceFrames = vadConfig.trailingSilenceMs.toFrames()
+            val rearmAfterSilenceFrames = vadConfig.rearmAfterSilenceMs.toFrames()
             val maxRecordingFrames = vadConfig.maxRecordingMs.toFrames()
 
             fun updateStats() {
@@ -213,7 +227,22 @@ class AudioEngine(
                     if (vadSpeechFrames >= vadConfig.minSpeechFrames) {
                         vadSawSpeech = true
                         vadTrailingSilentFrames = 0
-                        updateVadStatus("VAD 已检测到语音，等待短暂停顿")
+                        if (!vadSpeechNotificationFired) {
+                            vadSpeechNotificationFired = true
+                            onVadSpeechDetected?.let { callback ->
+                                val statsSnapshot = currentRecordingStats
+                                appScope.launch(Dispatchers.Main.immediate) {
+                                    callback(statsSnapshot)
+                                }
+                            }
+                        }
+                        updateVadStatus(
+                            if (vadConfig.autoStopOnSilence) {
+                                "VAD 已检测到语音，等待短暂停顿"
+                            } else {
+                                "REALTIME 已检测到语音，持续收音"
+                            },
+                        )
                     } else {
                         updateVadStatus("VAD 等待起声 peak=${frameLevel.peakAbs}/$dynamicSpeechPeak rms=$frameRms/$dynamicSpeechRms")
                     }
@@ -225,17 +254,25 @@ class AudioEngine(
                         // 尾静音累计；否则背景噪声会让 AUTO_STOP 延迟好几秒。
                         vadTrailingSilentFrames += if (isQuiet) 1 else 1
                     }
-                    if (vadTrailingSilentFrames > 0 && vadTrailingSilentFrames % 5 == 0) {
-                        updateVadStatus("VAD 尾静音 ${vadTrailingSilentFrames * AudioConstants.FRAME_DURATION_MS}/${vadConfig.trailingSilenceMs}ms")
-                    }
-                    if (vadTrailingSilentFrames >= trailingSilenceFrames && pcmFrames >= minRecordingFrames) {
-                        vadTriggered = true
-                        recording = false
-                        updateVadStatus("VAD 已检测到短暂停顿，自动停止")
+                    if (vadConfig.autoStopOnSilence) {
+                        if (vadTrailingSilentFrames > 0 && vadTrailingSilentFrames % 5 == 0) {
+                            updateVadStatus("VAD 尾静音 ${vadTrailingSilentFrames * AudioConstants.FRAME_DURATION_MS}/${vadConfig.trailingSilenceMs}ms")
+                        }
+                        if (vadTrailingSilentFrames >= trailingSilenceFrames && pcmFrames >= minRecordingFrames) {
+                            vadTriggered = true
+                            recording = false
+                            updateVadStatus("VAD 已检测到短暂停顿，自动停止")
+                        }
+                    } else if (vadTrailingSilentFrames >= rearmAfterSilenceFrames) {
+                        vadSawSpeech = false
+                        vadSpeechFrames = 0
+                        vadTrailingSilentFrames = 0
+                        vadSpeechNotificationFired = false
+                        updateVadStatus("REALTIME 持续收音中，等待下一次起声")
                     }
                 }
 
-                if (!vadTriggered && pcmFrames >= maxRecordingFrames) {
+                if (vadConfig.autoStopOnSilence && !vadTriggered && pcmFrames >= maxRecordingFrames) {
                     vadTriggered = true
                     recording = false
                     updateVadStatus("VAD 达到最长录音时长，自动停止")
@@ -268,7 +305,11 @@ class AudioEngine(
                 onLog(
                     "音频上行启动：${AudioConstants.INPUT_SAMPLE_RATE}Hz/mono/" +
                         "${AudioConstants.FRAME_DURATION_MS}ms，PCM ${AudioConstants.PCM_FRAME_BYTES}B/帧" +
-                        if (vadConfig.enabled) "，AUTO_STOP VAD 已启用" else "",
+                        if (vadConfig.enabled) {
+                            if (vadConfig.autoStopOnSilence) "，AUTO_STOP VAD 已启用" else "，REALTIME VAD 已启用"
+                        } else {
+                            ""
+                        },
                 )
                 onStatusChanged(
                     when {

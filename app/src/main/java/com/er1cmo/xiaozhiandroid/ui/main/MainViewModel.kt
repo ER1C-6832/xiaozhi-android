@@ -50,6 +50,8 @@ class MainViewModel(
     private var downlinkBytes = 0L
     private var lastLogMessage = ""
     private var repeatedLogCount = 0
+    private var realtimeBargeInArmed = true
+    private var lastRealtimeBargeInAt = 0L
 
     suspend fun initialize() {
         if (hasStartedConfigCollection) return
@@ -77,18 +79,18 @@ class MainViewModel(
     }
 
     fun toggleManualMode() {
-        val nextMode = if (uiState.voiceMode == VoiceInteractionMode.Manual) {
-            VoiceInteractionMode.AutoStop
-        } else {
-            VoiceInteractionMode.Manual
+        val nextMode = when (uiState.voiceMode) {
+            VoiceInteractionMode.Manual -> VoiceInteractionMode.AutoStop
+            VoiceInteractionMode.AutoStop -> VoiceInteractionMode.Realtime
+            VoiceInteractionMode.Realtime -> VoiceInteractionMode.Manual
         }
         uiState = uiState.copy(
             voiceMode = nextMode,
             isManualMode = nextMode == VoiceInteractionMode.Manual,
-            vadStatus = if (nextMode == VoiceInteractionMode.AutoStop) {
-                "AUTO_STOP：点按开始，说完停顿后自动发送"
-            } else {
-                "MANUAL：按住说话"
+            vadStatus = when (nextMode) {
+                VoiceInteractionMode.Manual -> "MANUAL：按住说话"
+                VoiceInteractionMode.AutoStop -> "AUTO_STOP：点按开始，说完停顿后自动发送"
+                VoiceInteractionMode.Realtime -> "REALTIME：全双工持续收音，TTS 中可插话"
             },
             vadSummary = nextMode.description,
         )
@@ -278,6 +280,7 @@ class MainViewModel(
         )
         uiState = uiState.copy(
             conversationState = transitionTo(ConversationState.Idle, "ui_idle"),
+            isAudioInputActive = false,
             websocketStatus = "已手动关闭",
             autoReconnectStatus = "已暂停",
             sessionId = "暂无",
@@ -326,7 +329,11 @@ class MainViewModel(
             )
         }
 
-        if (audioEngine.isPlaybackActive() || uiState.conversationState == ConversationState.Speaking) {
+        val mode = uiState.voiceMode
+        val autoStopEnabled = mode == VoiceInteractionMode.AutoStop
+        val realtimeEnabled = mode == VoiceInteractionMode.Realtime
+
+        if (!realtimeEnabled && (audioEngine.isPlaybackActive() || uiState.conversationState == ConversationState.Speaking)) {
             audioEngine.stopPlayback(
                 onLog = ::appendLocalLogFromAnyThread,
                 onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
@@ -335,31 +342,47 @@ class MainViewModel(
             appendLocalLog(if (aborted) "开始录音前已打断当前 TTS 播放" else "开始录音前停止了本地 TTS 播放")
         }
 
-        val mode = uiState.voiceMode
-        val autoStopEnabled = mode == VoiceInteractionMode.AutoStop
-        val startSent = xiaozhiWebSocketClient.sendStartManualListening()
+        val listenMode = if (realtimeEnabled) "realtime" else "manual"
+        val startSent = xiaozhiWebSocketClient.sendStartListening(mode = listenMode)
         if (!startSent) {
             uiState = uiState.copy(
                 conversationState = transitionTo(ConversationState.Error, "ui_error"),
                 audioUplinkStatus = "listen/start 发送失败",
-                lastError = "listen/start/manual 发送失败",
+                lastError = "listen/start 发送失败",
             )
-            appendLocalLog("listen/start/manual 发送失败，开始重新连接")
+            appendLocalLog("listen/start 发送失败，开始重新连接")
             scheduleAutoReconnect("listen/start 发送失败")
             return
         }
 
+        realtimeBargeInArmed = true
         uiState = uiState.copy(
-            conversationState = transitionTo(ConversationState.Listening, if (autoStopEnabled) "auto_stop_listen_start" else "manual_listen_start"),
+            conversationState = transitionTo(
+                ConversationState.Listening,
+                when {
+                    realtimeEnabled -> "realtime_listen_start"
+                    autoStopEnabled -> "auto_stop_listen_start"
+                    else -> "manual_listen_start"
+                },
+            ),
+            isAudioInputActive = true,
             audioUplinkStatus = "正在启动录音",
-            vadStatus = if (autoStopEnabled) "VAD 等待起声" else "MANUAL：松开后发送 stop",
-            vadSummary = if (autoStopEnabled) "AUTO_STOP 已启用：检测到短暂停顿后自动 stop" else VoiceInteractionMode.Manual.description,
+            vadStatus = when {
+                realtimeEnabled -> "REALTIME：持续收音中，TTS 中可直接插话"
+                autoStopEnabled -> "VAD 等待起声"
+                else -> "MANUAL：松开后发送 stop"
+            },
+            vadSummary = when {
+                realtimeEnabled -> "全双工已启用：麦克风与 TTS 播放并行，AEC/NS 由 Android 系统处理"
+                autoStopEnabled -> "AUTO_STOP 已启用：检测到短暂停顿后自动 stop"
+                else -> VoiceInteractionMode.Manual.description
+            },
         )
         appendLocalLog(
-            if (autoStopEnabled) {
-                "已发送 listen/start/manual，AUTO_STOP 本地能量 VAD 已启用，开始麦克风录音与 Opus 上行"
-            } else {
-                "已发送 listen/start/manual，开始麦克风录音与 Opus 上行"
+            when {
+                realtimeEnabled -> "已发送 listen/start/realtime，REALTIME 全双工持续收音已启用"
+                autoStopEnabled -> "已发送 listen/start/manual，AUTO_STOP 本地能量 VAD 已启用，开始麦克风录音与 Opus 上行"
+                else -> "已发送 listen/start/manual，开始麦克风录音与 Opus 上行"
             },
         )
 
@@ -367,9 +390,15 @@ class MainViewModel(
             onEncodedFrame = { opusFrame -> xiaozhiWebSocketClient.sendAudioFrame(opusFrame) },
             onLog = ::appendLocalLogFromAnyThread,
             onStatusChanged = ::updateAudioStatusFromAnyThread,
-            vadConfig = if (autoStopEnabled) AudioEngine.VadConfig.autoStop() else AudioEngine.VadConfig.Disabled,
+            vadConfig = when {
+                realtimeEnabled -> AudioEngine.VadConfig.realtime()
+                autoStopEnabled -> AudioEngine.VadConfig.autoStop()
+                else -> AudioEngine.VadConfig.Disabled
+            },
             onVadStatusChanged = ::updateVadStatusFromAnyThread,
             onVadAutoStop = ::handleVadAutoStopFromAnyThread,
+            onVadSpeechDetected = ::handleRealtimeSpeechDetectedFromAnyThread,
+            audioProcessingConfig = AudioEngine.AudioProcessingConfig.Default,
         )
     }
 
@@ -408,6 +437,7 @@ class MainViewModel(
                 }
                 uiState = uiState.copy(
                     conversationState = stopState,
+                    isAudioInputActive = false,
                     audioUplinkStatus = if (wasRecording) {
                         "已停止，PCM ${stats.pcmFrames} 帧，Opus ${stats.opusPackets} 帧"
                     } else {
@@ -434,6 +464,7 @@ class MainViewModel(
                         } else {
                             uiState = uiState.copy(
                                 conversationState = transitionTo(if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle, "voice_no_useful_audio"),
+                                isAudioInputActive = false,
                                 lastError = "本次按住时间过短或未采集到有效语音帧",
                                 vadStatus = if (uiState.voiceMode == VoiceInteractionMode.AutoStop) "AUTO_STOP：等待下一次点按" else "MANUAL：按住说话",
                             )
@@ -473,8 +504,13 @@ class MainViewModel(
         }
         uiState = uiState.copy(
             conversationState = transitionTo(if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle, "abort"),
+            isAudioInputActive = false,
             audioUplinkStatus = if (wasRecording) "已停止" else uiState.audioUplinkStatus,
-            vadStatus = if (uiState.voiceMode == VoiceInteractionMode.AutoStop) "AUTO_STOP：等待下一次点按" else "MANUAL：按住说话",
+            vadStatus = when (uiState.voiceMode) {
+                VoiceInteractionMode.AutoStop -> "AUTO_STOP：等待下一次点按"
+                VoiceInteractionMode.Realtime -> "REALTIME：已停止全双工收音"
+                VoiceInteractionMode.Manual -> "MANUAL：按住说话"
+            },
         )
         appendLocalLog(if (sent) "已发送 abort/user_interruption" else "打断对话：本地已停止，WebSocket 未连接或 session_id 缺失")
     }
@@ -514,6 +550,38 @@ class MainViewModel(
                     "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
             )
             stopListening()
+        }
+    }
+
+    private fun handleRealtimeSpeechDetectedFromAnyThread(stats: AudioEngine.RecordingStats) {
+        appScope.launch(Dispatchers.Main.immediate) {
+            if (uiState.voiceMode != VoiceInteractionMode.Realtime) return@launch
+            if (!uiState.isAudioInputActive) return@launch
+            val now = System.currentTimeMillis()
+            val shouldBargeIn = realtimeBargeInArmed &&
+                (audioEngine.isPlaybackActive() || uiState.conversationState == ConversationState.Speaking) &&
+                now - lastRealtimeBargeInAt >= REALTIME_BARGE_IN_COOLDOWN_MS
+            uiState = uiState.copy(
+                conversationState = transitionTo(ConversationState.Listening, "realtime_voice_detected"),
+                vadStatus = "REALTIME：检测到用户语音，持续收音",
+                vadSummary = "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
+            )
+            if (shouldBargeIn) {
+                realtimeBargeInArmed = false
+                lastRealtimeBargeInAt = now
+                audioEngine.stopPlayback(
+                    onLog = ::appendLocalLogFromAnyThread,
+                    onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+                )
+                val abortSent = xiaozhiWebSocketClient.sendAbort()
+                appendLocalLog(
+                    if (abortSent) {
+                        "REALTIME 插话检测：已打断当前 TTS，保持麦克风持续上行"
+                    } else {
+                        "REALTIME 插话检测：已停止本地 TTS，abort 未发送成功"
+                    },
+                )
+            }
         }
     }
 
@@ -766,6 +834,7 @@ class MainViewModel(
         )
         uiState = uiState.copy(
             conversationState = transitionTo(if (asError) ConversationState.Error else ConversationState.Idle, "socket_lost"),
+            isAudioInputActive = false,
             websocketStatus = if (asError) "错误" else "已断开",
             sessionId = "暂无",
             audioUplinkStatus = if (audioEngine.isRecording()) "停止中" else uiState.audioUplinkStatus,
@@ -891,6 +960,7 @@ class MainViewModel(
             "start" -> {
                 downlinkOpusFrames = 0
                 downlinkBytes = 0L
+                realtimeBargeInArmed = true
                 audioEngine.markTtsStart(
                     onLog = ::appendLocalLogFromAnyThread,
                     onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
@@ -902,8 +972,21 @@ class MainViewModel(
                     onLog = ::appendLocalLogFromAnyThread,
                     onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
                 )
+                val nextState = if (uiState.voiceMode == VoiceInteractionMode.Realtime && uiState.isAudioInputActive) {
+                    ConversationState.Listening
+                } else if (xiaozhiWebSocketClient.hasActiveSession()) {
+                    ConversationState.Connected
+                } else {
+                    ConversationState.Idle
+                }
+                realtimeBargeInArmed = true
                 uiState = uiState.copy(
-                    conversationState = transitionTo(if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle, "tts_stop"),
+                    conversationState = transitionTo(nextState, "tts_stop"),
+                    vadStatus = if (nextState == ConversationState.Listening) {
+                        "REALTIME：TTS 已结束，继续持续收音"
+                    } else {
+                        uiState.vadStatus
+                    },
                 )
             }
             else -> {
@@ -1005,6 +1088,7 @@ class MainViewModel(
         )
         uiState = uiState.copy(
             conversationState = transitionTo(ConversationState.Idle, "ui_idle"),
+            isAudioInputActive = false,
             websocketStatus = websocketStatus,
             autoReconnectStatus = autoReconnectStatus,
             sessionId = "暂无",
@@ -1096,5 +1180,6 @@ class MainViewModel(
         const val OUTGOING_AUDIO_DRAIN_TIMEOUT_MS = 300L
         const val OUTGOING_AUDIO_DRAIN_POLL_MS = 25L
         const val OUTGOING_AUDIO_DRAIN_TARGET_BYTES = 0L
+        const val REALTIME_BARGE_IN_COOLDOWN_MS = 1_200L
     }
 }

@@ -5,6 +5,7 @@ data class ConversationUiState(
     val textInput: String = "",
     val isManualMode: Boolean = true,
     val voiceMode: VoiceInteractionMode = VoiceInteractionMode.Manual,
+    val isAudioInputActive: Boolean = false,
     val vadStatus: String = "MANUAL：按住说话",
     val vadSummary: String = "轻量能量阈值 VAD 已准备，AUTO_STOP 模式下启用",
     val isDebugExpanded: Boolean = true,
@@ -63,7 +64,7 @@ enum class VoiceInteractionMode(
     Realtime(
         wireName = "REALTIME",
         label = "实时",
-        description = "Phase 11C 全双工模式预留。",
+        description = "持续收音，TTS 播放时仍保持采集；检测到用户插话时打断 TTS。",
     ),
 }
 

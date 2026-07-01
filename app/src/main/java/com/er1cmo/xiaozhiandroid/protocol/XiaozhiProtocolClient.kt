@@ -11,7 +11,8 @@ interface XiaozhiProtocolClient {
     fun queuedBytes(): Long
     suspend fun connect(callbacks: XiaozhiWebSocketClient.Callbacks): Boolean
     fun sendWakeText(text: String): Boolean
-    fun sendStartManualListening(): Boolean
+    fun sendStartListening(mode: String = "manual"): Boolean
+    fun sendStartManualListening(): Boolean = sendStartListening(mode = "manual")
     fun sendStopListening(): Boolean
     fun sendAbort(): Boolean
     fun sendAudioFrame(opusFrame: ByteArray): Boolean
@@ -35,7 +36,7 @@ class WebSocketXiaozhiProtocolClient(
 
     override fun sendWakeText(text: String): Boolean = delegate.sendWakeText(text)
 
-    override fun sendStartManualListening(): Boolean = delegate.sendStartManualListening()
+    override fun sendStartListening(mode: String): Boolean = delegate.sendStartListening(mode)
 
     override fun sendStopListening(): Boolean = delegate.sendStopListening()
 

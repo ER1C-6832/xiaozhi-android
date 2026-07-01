@@ -177,7 +177,11 @@ class XiaozhiWebSocketClient(
     }
 
     fun sendStartManualListening(): Boolean {
-        return sendSessionPayload(XiaozhiMessage.startListening(sessionId, mode = "manual"))
+        return sendStartListening(mode = "manual")
+    }
+
+    fun sendStartListening(mode: String = "manual"): Boolean {
+        return sendSessionPayload(XiaozhiMessage.startListening(sessionId, mode = mode))
     }
 
     fun sendStopListening(): Boolean {
@@ -317,14 +321,12 @@ class XiaozhiWebSocketClient(
         const val NORMAL_CLOSE_CODE = 1000
         const val MAX_CLOSE_REASON_LENGTH = 100
         const val MAX_LAST_JSON_LENGTH = 8_000
-
-        fun defaultHttpClient(): OkHttpClient {
-            return OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.SECONDS)
-                .writeTimeout(10, TimeUnit.SECONDS)
-                .pingInterval(20, TimeUnit.SECONDS)
-                .build()
-        }
     }
+}
+
+private fun defaultHttpClient(): OkHttpClient {
+    return OkHttpClient.Builder()
+        .pingInterval(30, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
 }
