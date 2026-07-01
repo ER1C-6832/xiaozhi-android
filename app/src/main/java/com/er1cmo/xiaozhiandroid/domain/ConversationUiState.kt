@@ -6,8 +6,8 @@ data class ConversationUiState(
     val isManualMode: Boolean = true,
     val voiceMode: VoiceInteractionMode = VoiceInteractionMode.Manual,
     val isAudioInputActive: Boolean = false,
-    val vadStatus: String = "MANUAL：按住说话",
-    val vadSummary: String = "轻量能量阈值 VAD 已准备，AUTO_STOP 模式下启用",
+    val vadStatus: String = "长按对话：按住说话",
+    val vadSummary: String = "长按 / 自然 / 流式三种对话模式已准备",
     val isDebugExpanded: Boolean = true,
     val developerModeEnabled: Boolean = true,
     val clientId: String = "未生成",
@@ -53,18 +53,18 @@ enum class VoiceInteractionMode(
 ) {
     Manual(
         wireName = "MANUAL",
-        label = "手动",
-        description = "按住说话，松手后发送 stop。",
+        label = "长按对话",
+        description = "按住按钮说话，松开后发送 stop。",
     ),
     AutoStop(
         wireName = "AUTO_STOP",
         label = "自然对话",
-        description = "点一下开始，检测到停顿后自动发送 stop。",
+        description = "点一下开始，说完停顿后自动发送 stop。",
     ),
     Realtime(
         wireName = "REALTIME",
-        label = "实时",
-        description = "持续收音，TTS 播放时仍保持采集；检测到用户插话时打断 TTS。",
+        label = "流式对话",
+        description = "持续收音，助手回复中也可以插话。",
     ),
 }
 

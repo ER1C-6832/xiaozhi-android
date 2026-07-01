@@ -99,7 +99,7 @@ fun BottomControlBar(
 
             Text(
                 text = when (voiceMode) {
-                    VoiceInteractionMode.Manual -> "MANUAL：按住说话，松开后发送"
+                    VoiceInteractionMode.Manual -> "长按对话：按住说话，松开后发送"
                     VoiceInteractionMode.AutoStop -> vadStatus
                     VoiceInteractionMode.Realtime -> vadStatus
                 },
@@ -191,7 +191,7 @@ private fun VoiceActionButton(
         mode == VoiceInteractionMode.Manual -> "按住说话"
         isListening -> "停止收音"
         mode == VoiceInteractionMode.AutoStop -> "自然对话"
-        mode == VoiceInteractionMode.Realtime -> "全双工"
+        mode == VoiceInteractionMode.Realtime -> "流式对话"
         else -> "开始"
     }
 

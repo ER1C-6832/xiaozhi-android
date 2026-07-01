@@ -150,7 +150,7 @@ private fun MainTopBar(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    text = "Phase 11C · REALTIME Full Duplex",
+                    text = "Phase 11C · 流式对话",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

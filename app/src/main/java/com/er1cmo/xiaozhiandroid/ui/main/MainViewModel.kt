@@ -52,6 +52,8 @@ class MainViewModel(
     private var repeatedLogCount = 0
     private var realtimeBargeInArmed = true
     private var lastRealtimeBargeInAt = 0L
+    private var realtimeTtsStartedAt = 0L
+    private var realtimeBargeInArmJob: Job? = null
 
     suspend fun initialize() {
         if (hasStartedConfigCollection) return
@@ -88,9 +90,9 @@ class MainViewModel(
             voiceMode = nextMode,
             isManualMode = nextMode == VoiceInteractionMode.Manual,
             vadStatus = when (nextMode) {
-                VoiceInteractionMode.Manual -> "MANUAL：按住说话"
-                VoiceInteractionMode.AutoStop -> "AUTO_STOP：点按开始，说完停顿后自动发送"
-                VoiceInteractionMode.Realtime -> "REALTIME：全双工持续收音，TTS 中可插话"
+                VoiceInteractionMode.Manual -> "长按对话：按住说话"
+                VoiceInteractionMode.AutoStop -> "自然对话：点按开始，说完停顿后自动发送"
+                VoiceInteractionMode.Realtime -> "流式对话：持续收音，回复中可插话"
             },
             vadSummary = nextMode.description,
         )
@@ -273,6 +275,8 @@ class MainViewModel(
         autoReconnectJob?.cancel()
         autoReconnectJob = null
         pendingTextAfterReconnect = null
+        realtimeBargeInArmJob?.cancel()
+        realtimeBargeInArmJob = null
         appController.closeRuntime(
             reason = "user_close",
             onAudioLog = ::appendLocalLogFromAnyThread,
@@ -355,7 +359,10 @@ class MainViewModel(
             return
         }
 
-        realtimeBargeInArmed = true
+        realtimeBargeInArmed = !realtimeEnabled
+        realtimeTtsStartedAt = 0L
+        realtimeBargeInArmJob?.cancel()
+        realtimeBargeInArmJob = null
         uiState = uiState.copy(
             conversationState = transitionTo(
                 ConversationState.Listening,
@@ -368,20 +375,20 @@ class MainViewModel(
             isAudioInputActive = true,
             audioUplinkStatus = "正在启动录音",
             vadStatus = when {
-                realtimeEnabled -> "REALTIME：持续收音中，TTS 中可直接插话"
+                realtimeEnabled -> "流式对话：持续收音中，回复中可直接插话"
                 autoStopEnabled -> "VAD 等待起声"
-                else -> "MANUAL：松开后发送 stop"
+                else -> "长按对话：松开后发送 stop"
             },
             vadSummary = when {
-                realtimeEnabled -> "全双工已启用：麦克风与 TTS 播放并行，AEC/NS 由 Android 系统处理"
-                autoStopEnabled -> "AUTO_STOP 已启用：检测到短暂停顿后自动 stop"
+                realtimeEnabled -> "流式对话已启用：麦克风与 TTS 播放并行，AEC/NS 由 Android 系统处理"
+                autoStopEnabled -> "自然对话已启用：检测到停顿后自动 stop"
                 else -> VoiceInteractionMode.Manual.description
             },
         )
         appendLocalLog(
             when {
-                realtimeEnabled -> "已发送 listen/start/realtime，REALTIME 全双工持续收音已启用"
-                autoStopEnabled -> "已发送 listen/start/manual，AUTO_STOP 本地能量 VAD 已启用，开始麦克风录音与 Opus 上行"
+                realtimeEnabled -> "已发送 listen/start/realtime，流式对话持续收音已启用"
+                autoStopEnabled -> "已发送 listen/start/manual，自然对话本地能量 VAD 已启用，开始麦克风录音与 Opus 上行"
                 else -> "已发送 listen/start/manual，开始麦克风录音与 Opus 上行"
             },
         )
@@ -466,7 +473,11 @@ class MainViewModel(
                                 conversationState = transitionTo(if (xiaozhiWebSocketClient.hasActiveSession()) ConversationState.Connected else ConversationState.Idle, "voice_no_useful_audio"),
                                 isAudioInputActive = false,
                                 lastError = "本次按住时间过短或未采集到有效语音帧",
-                                vadStatus = if (uiState.voiceMode == VoiceInteractionMode.AutoStop) "AUTO_STOP：等待下一次点按" else "MANUAL：按住说话",
+                                vadStatus = when (uiState.voiceMode) {
+                                    VoiceInteractionMode.AutoStop -> "自然对话：等待下一次点按"
+                                    VoiceInteractionMode.Realtime -> "流式对话：等待下一次点按"
+                                    VoiceInteractionMode.Manual -> "长按对话：按住说话"
+                                },
                             )
                             appendLocalLog(
                                 "已发送 listen/stop，但本次有效 Opus 音频帧不足" +
@@ -491,6 +502,8 @@ class MainViewModel(
         val wasRecording = audioEngine.isRecording()
         if (wasRecording) {
             audioEngine.stopRecording()
+            realtimeBargeInArmJob?.cancel()
+            realtimeBargeInArmJob = null
             appendLocalLog("打断对话：已停止本地录音上行")
         }
         audioEngine.stopPlayback(
@@ -507,9 +520,9 @@ class MainViewModel(
             isAudioInputActive = false,
             audioUplinkStatus = if (wasRecording) "已停止" else uiState.audioUplinkStatus,
             vadStatus = when (uiState.voiceMode) {
-                VoiceInteractionMode.AutoStop -> "AUTO_STOP：等待下一次点按"
-                VoiceInteractionMode.Realtime -> "REALTIME：已停止全双工收音"
-                VoiceInteractionMode.Manual -> "MANUAL：按住说话"
+                VoiceInteractionMode.AutoStop -> "自然对话：等待下一次点按"
+                VoiceInteractionMode.Realtime -> "流式对话：已停止收音"
+                VoiceInteractionMode.Manual -> "长按对话：按住说话"
             },
         )
         appendLocalLog(if (sent) "已发送 abort/user_interruption" else "打断对话：本地已停止，WebSocket 未连接或 session_id 缺失")
@@ -557,31 +570,56 @@ class MainViewModel(
         appScope.launch(Dispatchers.Main.immediate) {
             if (uiState.voiceMode != VoiceInteractionMode.Realtime) return@launch
             if (!uiState.isAudioInputActive) return@launch
+
             val now = System.currentTimeMillis()
+            val playbackActive = audioEngine.isPlaybackActive() || uiState.conversationState == ConversationState.Speaking
+            val ttsGraceElapsed = realtimeTtsStartedAt <= 0L ||
+                now - realtimeTtsStartedAt >= REALTIME_BARGE_IN_ARM_DELAY_MS
             val shouldBargeIn = realtimeBargeInArmed &&
-                (audioEngine.isPlaybackActive() || uiState.conversationState == ConversationState.Speaking) &&
+                playbackActive &&
+                ttsGraceElapsed &&
                 now - lastRealtimeBargeInAt >= REALTIME_BARGE_IN_COOLDOWN_MS
+
+            if (!playbackActive) {
+                uiState = uiState.copy(
+                    conversationState = transitionTo(ConversationState.Listening, "stream_voice_detected"),
+                    vadStatus = "流式对话：检测到用户语音，持续收音",
+                    vadSummary = "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
+                )
+                return@launch
+            }
+
+            if (!shouldBargeIn) {
+                uiState = uiState.copy(
+                    vadStatus = if (!ttsGraceElapsed) {
+                        "流式对话：播放初段暂不插话，抑制 TTS 回声误触发"
+                    } else {
+                        "流式对话：播放中，插话检测冷却中"
+                    },
+                    vadSummary = "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
+                )
+                return@launch
+            }
+
+            realtimeBargeInArmed = false
+            lastRealtimeBargeInAt = now
             uiState = uiState.copy(
-                conversationState = transitionTo(ConversationState.Listening, "realtime_voice_detected"),
-                vadStatus = "REALTIME：检测到用户语音，持续收音",
+                conversationState = transitionTo(ConversationState.Listening, "stream_barge_in"),
+                vadStatus = "流式对话：检测到用户插话，已打断回复",
                 vadSummary = "peak=${stats.peakAbs}, rms=${stats.rms}, 静音 ${stats.silentRatioPercent}%",
             )
-            if (shouldBargeIn) {
-                realtimeBargeInArmed = false
-                lastRealtimeBargeInAt = now
-                audioEngine.stopPlayback(
-                    onLog = ::appendLocalLogFromAnyThread,
-                    onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
-                )
-                val abortSent = xiaozhiWebSocketClient.sendAbort()
-                appendLocalLog(
-                    if (abortSent) {
-                        "REALTIME 插话检测：已打断当前 TTS，保持麦克风持续上行"
-                    } else {
-                        "REALTIME 插话检测：已停止本地 TTS，abort 未发送成功"
-                    },
-                )
-            }
+            audioEngine.stopPlayback(
+                onLog = ::appendLocalLogFromAnyThread,
+                onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
+            )
+            val abortSent = xiaozhiWebSocketClient.sendAbort()
+            appendLocalLog(
+                if (abortSent) {
+                    "流式插话检测：已打断当前 TTS，保持麦克风持续上行"
+                } else {
+                    "流式插话检测：已停止本地 TTS，abort 未发送成功"
+                },
+            )
         }
     }
 
@@ -960,7 +998,18 @@ class MainViewModel(
             "start" -> {
                 downlinkOpusFrames = 0
                 downlinkBytes = 0L
-                realtimeBargeInArmed = true
+                realtimeTtsStartedAt = System.currentTimeMillis()
+                realtimeBargeInArmed = uiState.voiceMode != VoiceInteractionMode.Realtime
+                realtimeBargeInArmJob?.cancel()
+                if (uiState.voiceMode == VoiceInteractionMode.Realtime && uiState.isAudioInputActive) {
+                    realtimeBargeInArmJob = appScope.launch {
+                        delay(REALTIME_BARGE_IN_ARM_DELAY_MS)
+                        if (uiState.voiceMode == VoiceInteractionMode.Realtime && uiState.isAudioInputActive) {
+                            realtimeBargeInArmed = true
+                            appendLocalLog("流式对话：插话检测已开启")
+                        }
+                    }
+                }
                 audioEngine.markTtsStart(
                     onLog = ::appendLocalLogFromAnyThread,
                     onStatusChanged = ::updateAudioPlaybackStatusFromAnyThread,
@@ -979,11 +1028,14 @@ class MainViewModel(
                 } else {
                     ConversationState.Idle
                 }
+                realtimeBargeInArmJob?.cancel()
+                realtimeBargeInArmJob = null
                 realtimeBargeInArmed = true
+                realtimeTtsStartedAt = 0L
                 uiState = uiState.copy(
                     conversationState = transitionTo(nextState, "tts_stop"),
                     vadStatus = if (nextState == ConversationState.Listening) {
-                        "REALTIME：TTS 已结束，继续持续收音"
+                        "流式对话：TTS 已结束，继续持续收音"
                     } else {
                         uiState.vadStatus
                     },
@@ -1081,6 +1133,8 @@ class MainViewModel(
         autoReconnectJob = null
         autoReconnectAttempts = 0
         pendingTextAfterReconnect = null
+        realtimeBargeInArmJob?.cancel()
+        realtimeBargeInArmJob = null
         appController.closeRuntime(
             reason = "settings_reconnect",
             onAudioLog = ::appendLocalLogFromAnyThread,
@@ -1180,6 +1234,7 @@ class MainViewModel(
         const val OUTGOING_AUDIO_DRAIN_TIMEOUT_MS = 300L
         const val OUTGOING_AUDIO_DRAIN_POLL_MS = 25L
         const val OUTGOING_AUDIO_DRAIN_TARGET_BYTES = 0L
-        const val REALTIME_BARGE_IN_COOLDOWN_MS = 1_200L
+        const val REALTIME_BARGE_IN_COOLDOWN_MS = 2_000L
+        const val REALTIME_BARGE_IN_ARM_DELAY_MS = 2_000L
     }
 }

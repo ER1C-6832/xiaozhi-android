@@ -33,7 +33,7 @@ class AudioEngine(
         val silencePeakThreshold: Int = 1_050,
         val silenceRmsThreshold: Int = 260,
         val minSpeechFrames: Int = 3,
-        val trailingSilenceMs: Long = 560L,
+        val trailingSilenceMs: Long = 900L,
         val warmupMs: Long = 160L,
         val minRecordingMs: Long = 520L,
         val maxRecordingMs: Long = 16_000L,
@@ -45,12 +45,17 @@ class AudioEngine(
             fun autoStop(): VadConfig = VadConfig(enabled = true)
             fun realtime(): VadConfig = VadConfig(
                 enabled = true,
-                trailingSilenceMs = 560L,
-                warmupMs = 120L,
+                speechPeakThreshold = 2_600,
+                speechRmsThreshold = 520,
+                silencePeakThreshold = 1_200,
+                silenceRmsThreshold = 320,
+                minSpeechFrames = 8,
+                trailingSilenceMs = 900L,
+                warmupMs = 200L,
                 minRecordingMs = 0L,
                 maxRecordingMs = 24L * 60L * 60L * 1_000L,
                 autoStopOnSilence = false,
-                rearmAfterSilenceMs = 760L,
+                rearmAfterSilenceMs = 1_200L,
             )
         }
     }
@@ -238,9 +243,9 @@ class AudioEngine(
                         }
                         updateVadStatus(
                             if (vadConfig.autoStopOnSilence) {
-                                "VAD 已检测到语音，等待短暂停顿"
+                                "VAD 已检测到语音，等待停顿"
                             } else {
-                                "REALTIME 已检测到语音，持续收音"
+                                "流式对话已检测到语音，持续收音"
                             },
                         )
                     } else {
@@ -251,7 +256,7 @@ class AudioEngine(
                         vadTrailingSilentFrames = 0
                     } else {
                         // py-xiaozhi 的交互更接近连续流：只要不是明确语音，就应该快速进入
-                        // 尾静音累计；否则背景噪声会让 AUTO_STOP 延迟好几秒。
+                        // 尾静音累计；否则背景噪声会让自然对话延迟好几秒。
                         vadTrailingSilentFrames += if (isQuiet) 1 else 1
                     }
                     if (vadConfig.autoStopOnSilence) {
@@ -261,14 +266,14 @@ class AudioEngine(
                         if (vadTrailingSilentFrames >= trailingSilenceFrames && pcmFrames >= minRecordingFrames) {
                             vadTriggered = true
                             recording = false
-                            updateVadStatus("VAD 已检测到短暂停顿，自动停止")
+                            updateVadStatus("VAD 已检测到停顿，自动停止")
                         }
                     } else if (vadTrailingSilentFrames >= rearmAfterSilenceFrames) {
                         vadSawSpeech = false
                         vadSpeechFrames = 0
                         vadTrailingSilentFrames = 0
                         vadSpeechNotificationFired = false
-                        updateVadStatus("REALTIME 持续收音中，等待下一次起声")
+                        updateVadStatus("流式对话持续收音中，等待下一次起声")
                     }
                 }
 
@@ -306,7 +311,7 @@ class AudioEngine(
                     "音频上行启动：${AudioConstants.INPUT_SAMPLE_RATE}Hz/mono/" +
                         "${AudioConstants.FRAME_DURATION_MS}ms，PCM ${AudioConstants.PCM_FRAME_BYTES}B/帧" +
                         if (vadConfig.enabled) {
-                            if (vadConfig.autoStopOnSilence) "，AUTO_STOP VAD 已启用" else "，REALTIME VAD 已启用"
+                            if (vadConfig.autoStopOnSilence) "，自然对话 VAD 已启用" else "，流式对话 VAD 已启用"
                         } else {
                             ""
                         },
