@@ -19,3 +19,15 @@ val CharcoalPressed = Color(0xFF333333)
 val WarmTextPrimary = Color(0xFF1E1E1C)
 val WarmTextSecondary = Color(0xFF77746B)
 val WarmSurfaceVariant = Color(0xFFF1F0EC)
+
+// Backward-compatible aliases used by Phase 10 support components.
+// The aurora rewrite renamed the canonical palette above, but DebugLogPanel and
+// ToolCallPanel still use the earlier organic-minimal names. Keep these aliases
+// so all UI components compile while sharing the same neutral warm palette.
+val Charcoal = CharcoalBlack
+val OatBackground = WarmOatBackground
+val WarmBorder = WarmLine
+val WarmSurface = WarmCardWhite
+val WarmText = WarmTextPrimary
+val SoftAmber = ColorPeach
+val SoftClay = ColorRoseDust
