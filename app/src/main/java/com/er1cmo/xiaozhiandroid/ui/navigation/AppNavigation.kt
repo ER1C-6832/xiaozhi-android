@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.er1cmo.xiaozhiandroid.core.AppController
@@ -32,6 +33,8 @@ fun AppNavigation() {
         MainViewModel(appController = appController)
     }
     var currentScreen by remember { mutableStateOf(AppScreen.Main) }
+    var wakeWordEnabled by rememberSaveable { mutableStateOf(false) }
+    var wakeWordKeyword by rememberSaveable { mutableStateOf("小智") }
 
     LaunchedEffect(appController) {
         appController.start()
@@ -44,6 +47,9 @@ fun AppNavigation() {
     when (currentScreen) {
         AppScreen.Main -> MainScreen(
             viewModel = viewModel,
+            wakeWordEnabled = wakeWordEnabled,
+            wakeWordKeyword = wakeWordKeyword,
+            onWakeWordEnabledChange = { enabled -> wakeWordEnabled = enabled },
             onOpenSettings = {
                 viewModel.appendLocalLog("打开参数设置")
                 currentScreen = AppScreen.Settings
