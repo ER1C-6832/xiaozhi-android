@@ -24,13 +24,12 @@ import java.util.Locale
  * py-xiaozhi's stable interrupt contract: only keyword-like recognition can trigger
  * start/abort; plain energy VAD never gets to interrupt TTS.
  *
- * Fix over the first 12A package:
- * - Do not hard-force offline recognition forever. Many Android devices expose a
- *   SpeechRecognizer service but have no local zh-CN language pack, so
- *   EXTRA_PREFER_OFFLINE=true can keep returning no_match for short words.
- * - Use short-query recognition, smaller silence windows, candidate logging, and
- *   offline-first then mixed/online fallback.
- * - Log partial/final candidates so real device behavior is observable.
+ * Android 12 real-device fix:
+ * ERROR 12 is language_not_supported on many SpeechRecognizer implementations. The
+ * previous package forced zh-CN + language preference + offline/short query, which
+ * can make the recognizer reject the session before returning any candidate. This
+ * version probes several recognition profiles and finally drops language extras so
+ * the device recognizer can use its own default language path.
  */
 @Composable
 fun ForegroundWakeWordController(
@@ -40,7 +39,7 @@ fun ForegroundWakeWordController(
     onDetected: (String) -> Unit,
     onStatus: (String) -> Unit,
 ) {
-    val context = LocalContext.current.applicationContext
+    val context = LocalContext.current
     val latestOnDetected by rememberUpdatedState(onDetected)
     val latestOnStatus by rememberUpdatedState(onStatus)
     val normalizedKeyword = keyword.trim().ifBlank { DEFAULT_KEYWORD }
@@ -80,6 +79,8 @@ private class SystemSpeechWakeWordController(
     private val onStatus: (String) -> Unit,
 ) : RecognitionListener {
     private val handler = Handler(Looper.getMainLooper())
+    private val profiles = buildRecognitionProfiles()
+    private var profileIndex = 0
     private var recognizer: SpeechRecognizer? = null
     private var keyword: String = DEFAULT_KEYWORD
     private var active = false
@@ -90,7 +91,6 @@ private class SystemSpeechWakeWordController(
     private var restartGeneration = 0
     private var sessionGeneration = 0
     private var unavailableReported = false
-    private var preferOffline = true
     private var consecutiveNoMatch = 0
     private var lastCandidateLog = ""
 
@@ -144,6 +144,13 @@ private class SystemSpeechWakeWordController(
         }
     }
 
+    private fun recreateRecognizer() {
+        runCatching { recognizer?.cancel() }
+        runCatching { recognizer?.destroy() }
+        recognizer = null
+        ensureRecognizer()
+    }
+
     private fun scheduleRestart(delayMs: Long, reason: String) {
         if (!active || released) return
         val generation = ++restartGeneration
@@ -158,24 +165,25 @@ private class SystemSpeechWakeWordController(
         if (!active || released) return
         ensureRecognizer()
         val generation = ++sessionGeneration
-        val languageTag = Locale.CHINA.toLanguageTag()
+        val profile = currentProfile()
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            // Short-query mode is more reliable for a two-syllable wake phrase than
-            // long free-form dictation on many Android recognizers.
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, languageTag)
-            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, languageTag)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, profile.languageModel)
+            profile.languageTag?.let { languageTag ->
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, languageTag)
+            }
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 10)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 220L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 360L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 260L)
+            if (profile.preferOffline) {
+                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            }
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, profile.minimumLengthMs)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, profile.completeSilenceMs)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, profile.possiblyCompleteSilenceMs)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         }
         listening = true
-        report("前台唤醒词监听中：$keyword（${if (preferOffline) "离线优先" else "混合识别回退"}）")
+        report("前台唤醒词监听中：$keyword（${profile.label}）")
         runCatching {
             recognizer?.startListening(intent)
             scheduleSessionWatchdog(generation)
@@ -200,6 +208,7 @@ private class SystemSpeechWakeWordController(
         source: String,
     ) {
         if (!active || released || values.isEmpty()) return
+        consecutiveNoMatch = 0
         logCandidates(values, source)
         val hit = values.firstOrNull { candidate -> matchesWakeWord(candidate, keyword) } ?: return
         val now = System.currentTimeMillis()
@@ -245,7 +254,7 @@ private class SystemSpeechWakeWordController(
     }
 
     override fun onReadyForSpeech(params: Bundle?) {
-        report("前台唤醒词监听中：$keyword（${if (preferOffline) "离线优先" else "混合识别回退"}）")
+        report("前台唤醒词监听中：$keyword（${currentProfile().label}）")
     }
 
     override fun onBeginningOfSpeech() {
@@ -267,45 +276,62 @@ private class SystemSpeechWakeWordController(
             SpeechRecognizer.ERROR_NO_MATCH,
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
                 consecutiveNoMatch += 1
-                maybeFallbackFromOffline()
+                if (consecutiveNoMatch >= NO_MATCH_BEFORE_PROFILE_SWITCH && advanceProfile("连续未返回候选：$label")) {
+                    recreateRecognizer()
+                    scheduleRestart(delayMs = RESTART_AFTER_PROFILE_SWITCH_MS, reason = "唤醒词切换识别配置后重试")
+                } else {
+                    scheduleRestart(
+                        delayMs = RESTART_AFTER_NO_MATCH_MS,
+                        reason = "唤醒词未命中($label)，继续监听",
+                    )
+                }
+            }
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
+                recreateRecognizer()
                 scheduleRestart(
-                    delayMs = RESTART_AFTER_NO_MATCH_MS,
-                    reason = "唤醒词未命中($label)，继续监听",
+                    delayMs = RESTART_AFTER_ERROR_MS,
+                    reason = "唤醒词识别器忙，已重建识别器",
                 )
             }
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> scheduleRestart(
-                delayMs = RESTART_AFTER_ERROR_MS,
-                reason = "唤醒词识别器忙，稍后重试",
-            )
             SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                 active = false
                 report("唤醒词监听失败：缺少麦克风权限")
             }
+            ERROR_LANGUAGE_NOT_SUPPORTED_CODE,
+            ERROR_LANGUAGE_UNAVAILABLE_CODE -> {
+                if (advanceProfile("语言不支持：$label")) {
+                    recreateRecognizer()
+                    scheduleRestart(delayMs = RESTART_AFTER_PROFILE_SWITCH_MS, reason = "唤醒词切换语言配置后重试")
+                } else {
+                    recreateRecognizer()
+                    scheduleRestart(
+                        delayMs = RESTART_AFTER_UNSUPPORTED_LANGUAGE_MS,
+                        reason = "系统识别器仍不支持当前唤醒词语言，延迟重试",
+                    )
+                }
+            }
             SpeechRecognizer.ERROR_NETWORK,
             SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
-            SpeechRecognizer.ERROR_SERVER -> {
-                if (!preferOffline) {
-                    preferOffline = true
-                    consecutiveNoMatch = 0
-                    report("混合识别网络异常，回到离线优先模式")
-                }
-                scheduleRestart(
-                    delayMs = RESTART_AFTER_ERROR_MS,
-                    reason = "唤醒词识别错误：$label，稍后重试",
-                )
-            }
-            else -> scheduleRestart(
+            SpeechRecognizer.ERROR_SERVER -> scheduleRestart(
                 delayMs = RESTART_AFTER_ERROR_MS,
                 reason = "唤醒词识别错误：$label，稍后重试",
             )
+            else -> {
+                if (error >= ERROR_LANGUAGE_NOT_SUPPORTED_CODE && advanceProfile("未知识别错误：$label")) {
+                    recreateRecognizer()
+                    scheduleRestart(delayMs = RESTART_AFTER_PROFILE_SWITCH_MS, reason = "唤醒词切换识别配置后重试")
+                } else {
+                    scheduleRestart(
+                        delayMs = RESTART_AFTER_ERROR_MS,
+                        reason = "唤醒词识别错误：$label，稍后重试",
+                    )
+                }
+            }
         }
     }
 
     override fun onResults(results: Bundle?) {
         val values = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        if (values.isNotEmpty()) {
-            consecutiveNoMatch = 0
-        }
         handleCandidates(values, source = "final")
         if (active) restartAfterUtterance()
     }
@@ -317,12 +343,21 @@ private class SystemSpeechWakeWordController(
 
     override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
-    private fun maybeFallbackFromOffline() {
-        if (preferOffline && consecutiveNoMatch >= OFFLINE_NO_MATCH_BEFORE_FALLBACK) {
-            preferOffline = false
-            consecutiveNoMatch = 0
-            report("本机离线短词识别未命中，切换到系统混合识别回退")
+    private fun currentProfile(): RecognitionProfile {
+        return profiles[profileIndex.coerceIn(0, profiles.lastIndex)]
+    }
+
+    private fun advanceProfile(reason: String): Boolean {
+        if (profileIndex >= profiles.lastIndex) {
+            report("唤醒词识别配置已到最后一档，无法继续降级：$reason")
+            return false
         }
+        profileIndex += 1
+        consecutiveNoMatch = 0
+        lastCandidateLog = ""
+        val nextProfile = currentProfile()
+        report("唤醒词识别配置切换为：${nextProfile.label}（$reason）")
+        return true
     }
 
     private fun report(message: String) {
@@ -342,6 +377,8 @@ private class SystemSpeechWakeWordController(
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "recognizer_busy"
             SpeechRecognizer.ERROR_SERVER -> "server"
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "speech_timeout"
+            ERROR_LANGUAGE_NOT_SUPPORTED_CODE -> "language_not_supported"
+            ERROR_LANGUAGE_UNAVAILABLE_CODE -> "language_unavailable"
             else -> "unknown_$error"
         }
     }
@@ -361,9 +398,63 @@ private class SystemSpeechWakeWordController(
             .lowercase(Locale.ROOT)
             .replace(Regex("[\\s\\p{Punct}，。！？、,.!?：:；;\"'`~·_\\-]"), "")
             .replace("xiaozi", "xiaozhi")
-            .replace("xiao zhi", "xiaozhi")
             .replace("xiaozhi", "小智")
             .replace("小智同学", "小智")
+    }
+
+    private fun buildRecognitionProfiles(): List<RecognitionProfile> {
+        val list = mutableListOf(
+            RecognitionProfile(
+                label = "中文短词",
+                languageTag = "zh-CN",
+                languageModel = RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH,
+                preferOffline = false,
+                minimumLengthMs = 180L,
+                completeSilenceMs = 360L,
+                possiblyCompleteSilenceMs = 220L,
+            ),
+            RecognitionProfile(
+                label = "中文听写",
+                languageTag = "zh-CN",
+                languageModel = RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                preferOffline = false,
+                minimumLengthMs = 260L,
+                completeSilenceMs = 480L,
+                possiblyCompleteSilenceMs = 300L,
+            ),
+            RecognitionProfile(
+                label = "中文宽松",
+                languageTag = "zh",
+                languageModel = RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH,
+                preferOffline = false,
+                minimumLengthMs = 180L,
+                completeSilenceMs = 420L,
+                possiblyCompleteSilenceMs = 260L,
+            ),
+        )
+        val defaultLanguage = Locale.getDefault().toLanguageTag()
+            .takeIf { it.isNotBlank() && it != "und" && it != "zh-CN" && it != "zh" }
+        if (defaultLanguage != null) {
+            list += RecognitionProfile(
+                label = "系统默认语言($defaultLanguage)",
+                languageTag = defaultLanguage,
+                languageModel = RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH,
+                preferOffline = false,
+                minimumLengthMs = 220L,
+                completeSilenceMs = 500L,
+                possiblyCompleteSilenceMs = 320L,
+            )
+        }
+        list += RecognitionProfile(
+            label = "系统默认无语言约束",
+            languageTag = null,
+            languageModel = RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH,
+            preferOffline = false,
+            minimumLengthMs = 220L,
+            completeSilenceMs = 520L,
+            possiblyCompleteSilenceMs = 340L,
+        )
+        return list
     }
 
     private val defaultWakeWordVariants = setOf(
@@ -396,16 +487,30 @@ private class SystemSpeechWakeWordController(
         "xiaozi",
     ).map(::normalize)
 
+    private data class RecognitionProfile(
+        val label: String,
+        val languageTag: String?,
+        val languageModel: String,
+        val preferOffline: Boolean,
+        val minimumLengthMs: Long,
+        val completeSilenceMs: Long,
+        val possiblyCompleteSilenceMs: Long,
+    )
+
     private companion object {
         const val DEFAULT_KEYWORD = "小智"
         const val DETECTION_COOLDOWN_MS = 1_500L
         const val CALLBACK_DELAY_AFTER_HIT_MS = 300L
-        const val RESTART_AFTER_NO_MATCH_MS = 220L
-        const val RESTART_AFTER_UTTERANCE_MS = 320L
+        const val RESTART_AFTER_NO_MATCH_MS = 240L
+        const val RESTART_AFTER_UTTERANCE_MS = 340L
         const val RESTART_AFTER_ERROR_MS = 900L
         const val RESTART_AFTER_WATCHDOG_MS = 80L
+        const val RESTART_AFTER_PROFILE_SWITCH_MS = 220L
+        const val RESTART_AFTER_UNSUPPORTED_LANGUAGE_MS = 3_000L
         const val SESSION_WATCHDOG_MS = 6_500L
-        const val OFFLINE_NO_MATCH_BEFORE_FALLBACK = 2
+        const val NO_MATCH_BEFORE_PROFILE_SWITCH = 4
+        const val ERROR_LANGUAGE_NOT_SUPPORTED_CODE = 12
+        const val ERROR_LANGUAGE_UNAVAILABLE_CODE = 13
     }
 }
 
