@@ -53,10 +53,8 @@ class SherpaWakeWordDetector(
 
     fun resetStream() {
         runCatching { stream?.release() }
-        // The 2025 zh-en model uses a phone+ppinyin keyword grammar. We keep the
-        // generated keywords_xiaozhi.txt as the primary keyword list and also pass
-        // the active keyword grammar here so future custom keywords can be tested
-        // without regenerating the asset file.
+        // Keep the file-based keyword list as the source of truth, and also pass
+        // the same grammar here so custom stream creation behaves consistently.
         val customKeywords = keywordGrammar(config.keyword)
         stream = spotter?.createStream(customKeywords)
     }
@@ -92,8 +90,18 @@ class SherpaWakeWordDetector(
     companion object {
         const val XIAOZHI_KEYWORD_GRAMMAR =
             "x iǎo zh ì @小智/" +
-                "x iǎo zh ī @小知/" +
-                "x iǎo zh ì t óng x ué @小智同学"
+                "x iǎo zh ī @小智/" +
+                "x iǎo zh í @小智/" +
+                "x iǎo zh ǐ @小智/" +
+                "x iǎo z ì @小智/" +
+                "x iǎo z ī @小智/" +
+                "x iǎo zh ì x iǎo zh ì @小智小智/" +
+                "x iǎo zh ì x iǎo zh ī @小智小智/" +
+                "x iǎo zh ī x iǎo zh ī @小智小智/" +
+                "x iǎo z ì x iǎo z ì @小智小智/" +
+                "x iǎo zh ì t óng x ué @小智同学/" +
+                "x iǎo zh ī t óng x ué @小智同学/" +
+                "x iǎo z ì t óng x ué @小智同学"
 
         private val REQUIRED_MODEL_FILES = listOf(
             "encoder-epoch-13-avg-2-chunk-16-left-64.onnx",

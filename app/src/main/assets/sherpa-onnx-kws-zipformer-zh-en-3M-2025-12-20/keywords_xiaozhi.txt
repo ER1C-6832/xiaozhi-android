@@ -1,3 +1,13 @@
 x iǎo zh ì @小智
-x iǎo zh ī @小知
+x iǎo zh ī @小智
+x iǎo zh í @小智
+x iǎo zh ǐ @小智
+x iǎo z ì @小智
+x iǎo z ī @小智
+x iǎo zh ì x iǎo zh ì @小智小智
+x iǎo zh ì x iǎo zh ī @小智小智
+x iǎo zh ī x iǎo zh ī @小智小智
+x iǎo z ì x iǎo z ì @小智小智
 x iǎo zh ì t óng x ué @小智同学
+x iǎo zh ī t óng x ué @小智同学
+x iǎo z ì t óng x ué @小智同学
