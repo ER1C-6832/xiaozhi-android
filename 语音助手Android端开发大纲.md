@@ -586,58 +586,265 @@ MCP 设置：
 - 重置配置能恢复默认值
 - 敏感 token 不明文暴露在日志中
 ```
+Phase 8：Android 本机 MCP 基础层
 
-### Phase 8：Android 本机 MCP
+优先级最高。因为 MCP 是“助手能做事”的入口。
 
 目标：
 
-```text
+- 实现 AndroidMcpServer
 - 实现 McpToolRegistry
 - 实现 tools/list
 - 实现 tools/call
-- 实现 result / error 返回
-- 第一批 Android 本机工具：
-  - 获取设备信息
-  - 调节音量
-  - 打开 App
-  - 手电筒开关
-  - 获取当前电量
-  - 获取网络状态
-```
+- 实现 JSON-RPC result / error
+- WebSocket 收到 type=mcp 时分发给本机 MCP
+- 本机 MCP 回复通过 WebSocket 发回服务端
 
-验收标准：
+第一批工具：
 
-```text
-- 服务端下发 tools/list 时，Android 能返回工具列表
-- 服务端下发 tools/call 时，Android 能调用本机工具
-- 工具调用失败时返回 JSON-RPC error
-- 不依赖 PC sidecar
-```
+system.get_device_info
+system.get_battery_status
+system.get_network_status
+audio.get_volume
+audio.set_volume
+app.open_app
+flashlight.set_enabled
+screen.get_brightness
+screen.set_brightness
 
-### Phase 9：摄像头、唤醒词、AEC、自动对话
+注意：调音量、亮度、手电筒、打开 App 都是 Android 原生优势。不要用 sidecar，不依赖 PC。
 
-预计时间：后续增强阶段。
+验收：
+
+服务端 tools/list 能看到 Android 工具
+服务端 tools/call 能调用工具
+工具失败能返回 JSON-RPC error
+token / 隐私信息不进入日志
+
+Phase 9：MCP 工具扩展与工具卡片 UI
+
+Phase 8 只做协议和第一批工具。Phase 9 做体验。
 
 目标：
 
-```text
-- CameraX 接入
-- 图片帧上传或视觉识别接口接入
-- 离线唤醒词模型调研
-- Android AcousticEchoCanceler / WebRTC AEC 调研
-- 自动对话模式
-- 通知栏快捷操作
-- 蓝牙耳机兼容
-```
+- 主界面显示“工具调用卡片”
+- 显示工具名、参数、执行结果、耗时、成功/失败
+- 设置页 tools/list 真实预览
+- 工具开关持久化
+- 工具权限说明
+- 高风险工具二次确认
 
-验收标准：
+示例体验：
 
-```text
-- 摄像头权限和预览正常
-- 唤醒词不会显著增加耗电
-- AEC 开关可控
-- 自动模式不会误触发大量请求
-```
+用户：打开微信
+小智：正在打开微信
+界面：工具卡片显示 app.open_app 成功
+
+用户：把音量调到 30%
+界面：工具卡片显示 audio.set_volume volume=30
+
+这会让 Android 版比 PC 版更“可见、可信、可控”。
+
+Phase 10：UI 2.0 与动效系统
+
+这个不要拖太久。因为用户第一眼看到的就是界面。
+
+目标：
+
+- 重做主界面视觉风格
+- 小智头像动画化
+- 聆听中：波形 / 呼吸光圈
+- 思考中：粒子 / 光点 / 旋转状态
+- 说话中：嘴型或音频波形
+- 按住说话按钮增加按压缩放和震动反馈
+- 打断按钮增加危险色/动效
+- 文本输入和发送区重排
+- 调试面板改成开发者抽屉
+
+建议风格：
+
+Material 3 + 自定义 Assistant Orb
+不要再像 PC Qt 复刻
+Android 版要像一个现代移动端 AI 助手
+
+差异化点：
+
+可以做“状态生命体”：
+待命是一颗安静的球
+聆听时向外扩散声波
+思考时内部流光
+说话时跟随 TTS 音量跳动
+错误时轻微红色闪烁
+
+Phase 11：自动对话 / VAD / AEC
+
+这是从“按住说话”走向“自然对话”的关键。
+
+目标：
+
+- 手动模式：按住说话
+- 自动模式：点击一次开始，自动监听
+- VAD 检测用户停顿后自动 stop
+- TTS 播放中可打断
+- AEC 开关
+- REALTIME / AUTO_STOP / MANUAL 三种模式
+
+对应 py-xiaozhi 的能力：它有 REALTIME / AUTO_STOP / MANUAL 和 keep_listening，并且 AEC 开启时允许在 speaking 状态继续采集。
+
+Android 实现建议：
+
+第一版先用能量阈值 VAD
+第二版再接 WebRTC VAD / Android AEC
+第三版再做真正全双工
+
+Phase 12：离线唤醒词
+
+目标：
+
+- 设置页选择唤醒词
+- 唤醒词开关
+- 前台状态下离线唤醒
+- 唤醒后自动连接并进入自动对话
+- TTS 播放中唤醒则打断
+
+先别一开始就做后台常驻，因为 Android 12/14 之后前台服务、麦克风权限、耗电限制都比较麻烦。第一版可以先做：
+
+App 前台运行时唤醒
+屏幕亮着时唤醒
+真机低延迟测试
+
+后续再做：
+
+前台服务
+通知栏常驻
+低功耗策略
+
+Phase 13：CameraX 多模态
+
+目标：
+
+- CameraX 预览
+- 拍照发给服务端视觉接口
+- 相册选图
+- 图片压缩
+- “看一下这是什么”
+- “识别屏幕上的文字”
+- “帮我描述这张图”
+
+Android 差异化功能：
+
+拍照后直接语音追问
+识别包装、说明书、设备面板
+拍摄电脑报错界面后让小智解释
+拍摄白板/便签后总结
+
+这会让 Android 版明显超过 PC 端的普通聊天体验。
+
+Phase 14：Android 系统体验增强
+
+这是 Android 版可以超越 py-xiaozhi 的地方。
+
+建议做：
+
+通知栏快捷控制
+快捷设置 Tile
+桌面小组件
+分享菜单“发送给小智”
+悬浮球 / 小窗模式
+锁屏快捷入口
+耳机线控按键
+蓝牙耳机麦克风兼容
+系统音频焦点管理
+
+示例：
+
+用户在浏览器看到一段文字 → 分享给小智 → 小智语音总结
+用户下拉快捷设置 → 点“小智” → 直接开始对话
+用户戴蓝牙耳机 → 长按耳机按钮唤醒小智
+
+这些是 PC 端很难自然做到的。
+
+Phase 15：对话历史、任务卡片与本地记忆层
+
+这里的“记忆”不是云端长期记忆，而是 App 本地产品功能。
+
+目标：
+
+- 最近对话历史
+- STT 文本记录
+- TTS 回复记录
+- 工具调用记录
+- 可删除
+- 可导出日志
+- 本地隐私开关
+
+进一步可以做：
+
+任务卡片
+待办卡片
+提醒卡片
+设备状态卡片
+常用指令卡片
+
+这会让它从“说完就没了”的语音助手，变成“能沉淀结果”的个人助手。
+
+Phase 16：场景模式和自动化
+
+这是“超越 py-xiaozhi”的方向。
+
+示例场景：
+
+开车模式：
+  更大按钮
+  蓝牙优先
+  简短回复
+  自动播报
+
+睡前模式：
+  降低音量
+  限制亮屏
+  轻声 TTS
+  可设置明早提醒
+
+工作模式：
+  默认文本优先
+  工具调用需确认
+  日志更完整
+
+家庭中控模式：
+  优先 Home Assistant / IoT MCP
+  支持房间、设备、场景
+
+这比简单复刻 PC 客户端更有产品价值。
+
+Phase 17：稳定性、测试与性能
+
+不急着发布，但不能不做。
+
+目标：
+
+- 真机测试矩阵
+- 音频兼容测试
+- 蓝牙耳机测试
+- 网络切换测试
+- 前后台切换测试
+- WebSocket 断线恢复测试
+- DataStore 迁移测试
+- 日志脱敏测试
+
+可以做一个 App 内“诊断报告”：
+
+设备型号
+Android 版本
+麦克风权限
+AudioRecord source
+输入 peak/rms
+WebSocket 状态
+最近错误
+MCP 工具数量
+
+以后排查问题会轻松很多。
+
 
 ## 11. GitHub 同步方案
 
