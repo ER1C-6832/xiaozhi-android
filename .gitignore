@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Local download/extract cache for sherpa-onnx assets. Do not commit these.
+/.tmp_sherpa_*/

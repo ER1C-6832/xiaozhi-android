@@ -15,11 +15,17 @@ New-Item -ItemType Directory -Force $TmpDir | Out-Null
 New-Item -ItemType Directory -Force $AssetDir | Out-Null
 
 curl.exe -L --fail --retry 3 --retry-delay 2 -o $Archive $ModelUrl
+if (!(Test-Path $Archive)) {
+    throw "KWS model archive was not downloaded: $Archive"
+}
 
 Write-Host "[2/4] Extract model"
 # GNU tar on Windows treats C:\... as a remote host unless --force-local is used.
 tar --force-local -xjf $Archive -C $TmpDir
 $ModelDir = Join-Path $TmpDir $ModelName
+if (!(Test-Path $ModelDir)) {
+    throw "KWS model directory was not extracted: $ModelDir"
+}
 
 Write-Host "[3/4] Copy runtime files"
 Copy-Item (Join-Path $ModelDir "encoder-epoch-13-avg-2-chunk-16-left-64.onnx") $AssetDir -Force
@@ -27,13 +33,14 @@ Copy-Item (Join-Path $ModelDir "decoder-epoch-13-avg-2-chunk-16-left-64.onnx") $
 Copy-Item (Join-Path $ModelDir "joiner-epoch-13-avg-2-chunk-16-left-64.onnx") $AssetDir -Force
 Copy-Item (Join-Path $ModelDir "tokens.txt") $AssetDir -Force
 
-# 2025 model does not ship a top-level keywords.txt for XiaoZhi. Generate the
-# dedicated phone+ppinyin keyword list used by the Android demo.
-@"
-x iǎo zh ì @小智
-x iǎo zh ī @小知
-x iǎo zh ì t óng x ué @小智同学
-"@ | Set-Content -Encoding UTF8 (Join-Path $AssetDir "keywords_xiaozhi.txt")
+# Windows PowerShell 5.1 can parse non-BOM UTF-8 .ps1 files as the system ANSI
+# code page, which corrupts non-ASCII pinyin/Chinese text. Build the keyword
+# lines from Unicode code points so this script stays ASCII-safe.
+$kw1 = "x i$([char]0x01CE)o zh $([char]0x00EC) @$([char]0x5C0F)$([char]0x667A)"
+$kw2 = "x i$([char]0x01CE)o zh $([char]0x012B) @$([char]0x5C0F)$([char]0x77E5)"
+$kw3 = "x i$([char]0x01CE)o zh $([char]0x00EC) t $([char]0x00F3)ng x u$([char]0x00E9) @$([char]0x5C0F)$([char]0x667A)$([char]0x540C)$([char]0x5B66)"
+$keywordFile = Join-Path $AssetDir "keywords_xiaozhi.txt"
+[System.IO.File]::WriteAllLines($keywordFile, @($kw1, $kw2, $kw3), [System.Text.UTF8Encoding]::new($false))
 
 if (Test-Path $OldAssetDir) {
     Write-Host "Removing old 2024 KWS assets to avoid packaging both models"
